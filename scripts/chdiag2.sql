@@ -1,0 +1,10 @@
+SELECT '=== names starting mcp__ ===' AS s;
+SELECT name, count() AS c FROM events_full WHERE startsWith(name, 'mcp__') GROUP BY name ORDER BY c DESC LIMIT 15;
+SELECT '=== any name containing mcp ===' AS s;
+SELECT name, count() AS c FROM events_full WHERE position(name, 'mcp') > 0 GROUP BY name ORDER BY c DESC LIMIT 15;
+SELECT '=== tool_call_names containing mcp__ ===' AS s;
+SELECT arrayJoin(tool_call_names) AS tc, count() AS c FROM events_full WHERE arrayExists(x -> startsWith(x, 'mcp__'), tool_call_names) GROUP BY tc ORDER BY c DESC LIMIT 15;
+SELECT '=== type distribution ===' AS s;
+SELECT type, count() AS c FROM events_full GROUP BY type ORDER BY c DESC;
+SELECT '=== sample of all names ===' AS s;
+SELECT name, count() AS c FROM events_full GROUP BY name ORDER BY c DESC LIMIT 20;
