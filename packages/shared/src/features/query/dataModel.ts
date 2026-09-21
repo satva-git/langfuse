@@ -42,6 +42,20 @@ export const traceView: ViewDeclarationType = {
       type: "string[]",
       description: "User-defined tags associated with the trace.",
     },
+    frameworkName: {
+      sql: "traces.framework_name",
+      alias: "frameworkName",
+      type: "string",
+      description:
+        "Claude Code framework derived from a skill:<framework>:<skill> (or subagent-skill:...) tag on the trace.",
+    },
+    frameworkSkill: {
+      sql: "traces.framework_skill",
+      alias: "frameworkSkill",
+      type: "string",
+      description:
+        "Skill within the framework derived from a skill:<framework>:<skill> (or subagent-skill:...) tag on the trace.",
+    },
     userId: {
       sql: "traces.user_id",
       alias: "userId",
@@ -441,6 +455,20 @@ export const observationsView: ViewDeclarationType = {
       type: "string",
       description: "Name of the observation.",
     },
+    mcpName: {
+      sql: "observations.mcp_name",
+      alias: "mcpName",
+      type: "string",
+      description:
+        "MCP server derived from an mcp__<server>__<tool> observation name.",
+    },
+    mcpTool: {
+      sql: "observations.mcp_tool",
+      alias: "mcpTool",
+      type: "string",
+      description:
+        "MCP tool derived from an mcp__<server>__<tool> observation name.",
+    },
     level: {
       sql: "observations.level",
       alias: "level",
@@ -459,6 +487,22 @@ export const observationsView: ViewDeclarationType = {
       type: "string[]",
       relationTable: "traces",
       description: "User-defined tags associated with the trace.",
+    },
+    frameworkName: {
+      sql: "traces.framework_name",
+      alias: "frameworkName",
+      type: "string",
+      relationTable: "traces",
+      description:
+        "Claude Code framework derived from a skill:<framework>:<skill> (or subagent-skill:...) tag on the parent trace.",
+    },
+    frameworkSkill: {
+      sql: "traces.framework_skill",
+      alias: "frameworkSkill",
+      type: "string",
+      relationTable: "traces",
+      description:
+        "Skill within the framework derived from a skill:<framework>:<skill> (or subagent-skill:...) tag on the parent trace.",
     },
     providedModelName: {
       sql: "observations.provided_model_name",
