@@ -5,11 +5,7 @@
 # External connections from other machines will not be able to reach these services directly.
 services:
   langfuse-worker:
-    # Fork build: build the worker image from this repo's source so custom
-    # changes (e.g. ClickHouse migration 0049, dashboard dimensions) ship on deploy.
-    build:
-      dockerfile: ./worker/Dockerfile
-      context: .
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
     restart: always
     depends_on: &langfuse-depends-on
       postgres:
@@ -110,11 +106,7 @@ services:
       LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_REGION: ${LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_REGION:-}
 
   langfuse-web:
-    # Fork build: build the web image from this repo's source. The web container's
-    # entrypoint runs the ClickHouse migrations (incl. 0049) on boot.
-    build:
-      dockerfile: ./web/Dockerfile
-      context: .
+    image: docker.langfuse.com/langfuse/langfuse:4
     restart: always
     depends_on: *langfuse-depends-on
     ports:
