@@ -1,0 +1,41 @@
+name: Re-score framework & MCP dimensions
+
+# Keeps the "Claude Framework Governance" and "MCP Adoption & Performance"
+# Langfuse dashboards current by writing the categorical scores (framework_name,
+# framework_skill, mcp_name) they group on. Idempotent (deterministic score ids
+# -> upsert), so overlapping runs are safe. See scripts/rescore-derived-dimensions.mjs.
+
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly, on the hour (UTC)
+  workflow_dispatch: # allow manual runs from the Actions tab
+    inputs:
+      lookback_hours:
+        description: "Hours of history to scan"
+        required: false
+        default: "72"
+      dry_run:
+        description: "Set to 1 to log without writing"
+        required: false
+        default: "0"
+
+concurrency:
+  group: rescore-derived-dimensions
+  cancel-in-progress: false
+
+jobs:
+  rescore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Re-score derived dimensions
+        env:
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '72' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+        run: node scripts/rescore-derived-dimensions.mjs
