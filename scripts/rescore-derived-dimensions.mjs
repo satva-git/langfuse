@@ -7,23 +7,35 @@
 // (ClickHouse migration 0049) only exists in the fork build -- production runs
 // the official images, so nothing scores new data automatically.
 //
-// This job re-runs the exact backfill logic from langfuse-dashboards/README.md
-// over a recent lookback window. It is IDEMPOTENT: every score uses a
-// deterministic id, so overlapping runs upsert instead of duplicating. Schedule
-// it (GitHub Actions cron / Coolify scheduled task / plain cron) to keep the
-// dashboards live until Option A (structured metadata at instrumentation) ships.
+// This job re-runs the backfill logic from langfuse-dashboards/README.md over a
+// recent window and writes the missing scores. Design notes:
+//
+//   * events_only mode: this Langfuse v4 deployment runs in "events_only" mode,
+//     where the legacy list endpoints (/api/public/traces, /observations,
+//     /scores, /metrics) all return 404. The ONLY reader available is
+//     GET /api/public/v2/observations (cursor-based). POST /api/public/scores
+//     still works. So we read observations via v2 and cannot list scores.
+//   * Idempotency: every score uses a DETERMINISTIC id, so re-runs upsert.
+//   * No double-count vs the one-time 2026-09-21 backfill (whose scores carry
+//     random ids and cannot be listed here): FLOOR_ISO bounds the scan so we
+//     never touch a subject the backfill already covered. The floor sits just
+//     after the manually-scored gsd trace, so that trace keeps its single score
+//     and the job owns everything created after the floor.
 //
 // Env:
 //   LANGFUSE_HOST          e.g. https://langfuse.satva.xyz   (required)
 //   LANGFUSE_PUBLIC_KEY    pk-...                             (required)
 //   LANGFUSE_SECRET_KEY    sk-...                             (required)
 //   LOOKBACK_HOURS         window to scan, default 72
-//   DRY_RUN               "1" to log what would be written without writing
+//   FLOOR_ISO              earliest subject start time to score,
+//                          default 2026-09-22T05:00:00Z (see note above)
+//   DRY_RUN                "1" to log what would be written without writing
 
 const HOST = (process.env.LANGFUSE_HOST || "").replace(/\/+$/, "");
 const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY || "";
 const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || "";
 const LOOKBACK_HOURS = Number(process.env.LOOKBACK_HOURS || 72);
+const FLOOR_ISO = process.env.FLOOR_ISO || "2026-09-22T05:00:00Z";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 
 if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
@@ -36,7 +48,9 @@ if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
 const AUTH =
   "Basic " + Buffer.from(`${PUBLIC_KEY}:${SECRET_KEY}`).toString("base64");
 const now = new Date();
-const from = new Date(now.getTime() - LOOKBACK_HOURS * 3600 * 1000);
+const floor = new Date(FLOOR_ISO);
+const lookbackFrom = new Date(now.getTime() - LOOKBACK_HOURS * 3600 * 1000);
+const from = lookbackFrom > floor ? lookbackFrom : floor; // never earlier than the floor
 const fromISO = from.toISOString();
 const toISO = now.toISOString();
 
@@ -62,21 +76,21 @@ function parseMcpServer(name) {
   if (typeof name !== "string" || !name.startsWith("Tool: mcp__")) return null;
   const segs = name.split("__");
   if (segs.length < 3) return null;
-  const server = segs[1];
-  return server || null;
+  return segs[1] || null;
 }
 
-// Deterministic, filesystem/id-safe score id so re-runs upsert.
+// Deterministic, id-safe score id so re-runs upsert instead of duplicating.
 function scoreId(kind, subjectId, value) {
-  const raw = `${kind}|${subjectId}|${value}`;
-  return raw.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 200);
+  return `${kind}|${subjectId}|${value}`.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 200);
 }
 
 // ---- Langfuse public API helpers --------------------------------------------
 
 async function apiGet(path, params) {
   const url = new URL(`${HOST}${path}`);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  }
   const res = await fetch(url, { headers: { Authorization: AUTH } });
   if (!res.ok) {
     throw new Error(`GET ${url.pathname} -> ${res.status} ${await res.text()}`);
@@ -84,55 +98,26 @@ async function apiGet(path, params) {
   return res.json();
 }
 
-async function* paginate(path, params, timeKeys) {
-  let page = 1;
+// v2 observations is cursor-paginated (events_only-safe). Yields each observation.
+async function* observations(extraParams) {
+  let cursor;
   for (;;) {
-    const body = await apiGet(path, {
-      ...params,
-      [timeKeys.from]: fromISO,
-      [timeKeys.to]: toISO,
-      page,
+    const body = await apiGet("/api/public/v2/observations", {
+      ...extraParams,
+      fromStartTime: fromISO,
+      toStartTime: toISO,
       limit: 100,
+      cursor,
     });
     const rows = body.data || [];
     for (const row of rows) yield row;
-    const totalPages = body.meta?.totalPages ?? 1;
-    if (page >= totalPages || rows.length === 0) break;
-    page += 1;
+    cursor = body.meta?.cursor;
+    if (!cursor || rows.length === 0) break;
   }
 }
 
 let created = 0;
 let skipped = 0;
-
-// Presence dedupe. The original 2026-09-21 backfill wrote its scores with RANDOM
-// ids, so deterministic-id upsert alone would not recognise them and would create
-// duplicates for any subject inside the lookback window that the backfill already
-// covered (double-counting on the dashboards). So before writing, we load every
-// existing score of each derived name and skip subjects already scored with the
-// same value. Key: trace-scoped -> `${traceId}|${value}`; observation-scoped
-// (mcp_name) -> `${observationId}|${value}`.
-async function loadExistingKeys(name, keyOf) {
-  const keys = new Set();
-  let page = 1;
-  for (;;) {
-    const body = await apiGet("/api/public/scores", {
-      name,
-      page,
-      limit: 100,
-      fromTimestamp: "2026-01-01T00:00:00Z",
-    });
-    const rows = body.data || [];
-    for (const s of rows) {
-      const k = keyOf(s);
-      if (k) keys.add(k);
-    }
-    const totalPages = body.meta?.totalPages ?? 1;
-    if (page >= totalPages || rows.length === 0) break;
-    page += 1;
-  }
-  return keys;
-}
 
 async function upsertScore({ id, name, value, traceId, observationId, comment }) {
   if (DRY_RUN) {
@@ -140,8 +125,8 @@ async function upsertScore({ id, name, value, traceId, observationId, comment })
     skipped += 1;
     return;
   }
-  // Note: the public-scores body has no `source` field -- the server stamps
-  // source=API for public-API ingestion automatically (see PostScoreBodyFoundationSchema).
+  // The public-scores body has no `source` field -- the server stamps source=API
+  // for public-API ingestion automatically (see PostScoreBodyFoundationSchema).
   const payload = {
     id,
     name,
@@ -164,19 +149,18 @@ async function upsertScore({ id, name, value, traceId, observationId, comment })
 }
 
 // ---- Frameworks: one score per (trace, framework) and (trace, skill) --------
+// Root observations carry the trace's tags via the trace_context field group,
+// so one root observation per trace gives us the framework tags trace-scoped.
 
 async function rescoreFrameworks() {
-  const existingNames = await loadExistingKeys(
-    "framework_name",
-    (s) => `${s.traceId}|${s.stringValue}`,
-  );
-  const existingSkills = await loadExistingKeys(
-    "framework_skill",
-    (s) => `${s.traceId}|${s.stringValue}`,
-  );
   let traces = 0;
-  for await (const trace of paginate("/api/public/traces", {}, { from: "fromTimestamp", to: "toTimestamp" })) {
-    const tags = Array.isArray(trace.tags) ? trace.tags : [];
+  for await (const obs of observations({
+    isRootObservation: "true",
+    fields: "basic,trace_context",
+  })) {
+    const traceId = obs.traceId;
+    const tags = Array.isArray(obs.tags) ? obs.tags : [];
+    if (!traceId) continue;
     const frameworks = new Set();
     const skills = new Set();
     for (const tag of tags) {
@@ -188,24 +172,20 @@ async function rescoreFrameworks() {
     if (frameworks.size === 0) continue;
     traces += 1;
     for (const framework of frameworks) {
-      if (existingNames.has(`${trace.id}|${framework}`)) { skipped += 1; continue; }
       await upsertScore({
-        id: scoreId("framework_name", trace.id, framework),
+        id: scoreId("framework_name", traceId, framework),
         name: "framework_name",
         value: framework,
-        traceId: trace.id,
+        traceId,
       });
-      existingNames.add(`${trace.id}|${framework}`);
     }
     for (const skill of skills) {
-      if (existingSkills.has(`${trace.id}|${skill}`)) { skipped += 1; continue; }
       await upsertScore({
-        id: scoreId("framework_skill", trace.id, skill),
+        id: scoreId("framework_skill", traceId, skill),
         name: "framework_skill",
         value: skill,
-        traceId: trace.id,
+        traceId,
       });
-      existingSkills.add(`${trace.id}|${skill}`);
     }
   }
   console.log(`Frameworks: scanned ${traces} framework-tagged traces in the window.`);
@@ -214,22 +194,11 @@ async function rescoreFrameworks() {
 // ---- MCP: one score per TOOL observation named "Tool: mcp__server__tool" ----
 
 async function rescoreMcp() {
-  // mcp_name is observation-scoped (one score per tool call). Dedupe on the
-  // observation id so an already-scored call is never counted twice.
-  const existing = await loadExistingKeys(
-    "mcp_name",
-    (s) => (s.observationId ? `${s.observationId}|${s.stringValue}` : null),
-  );
   let calls = 0;
-  for await (const obs of paginate(
-    "/api/public/observations",
-    { type: "TOOL" },
-    { from: "fromStartTime", to: "toStartTime" },
-  )) {
+  for await (const obs of observations({ type: "TOOL", fields: "basic" })) {
     const server = parseMcpServer(obs.name);
-    if (!server) continue;
+    if (!server || !obs.traceId) continue;
     calls += 1;
-    if (existing.has(`${obs.id}|${server}`)) { skipped += 1; continue; }
     await upsertScore({
       id: scoreId("mcp_name", obs.id, server),
       name: "mcp_name",
@@ -238,7 +207,6 @@ async function rescoreMcp() {
       observationId: obs.id,
       comment: "scheduled re-score: extracted from tool name",
     });
-    existing.add(`${obs.id}|${server}`);
   }
   console.log(`MCP: scanned ${calls} mcp__ tool-call observations in the window.`);
 }
@@ -247,14 +215,14 @@ async function rescoreMcp() {
 
 (async () => {
   console.log(
-    `Re-score window ${fromISO} .. ${toISO} (${LOOKBACK_HOURS}h)${DRY_RUN ? " [DRY RUN]" : ""}`,
+    `Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${DRY_RUN ? " [DRY RUN]" : ""}`,
   );
   await rescoreFrameworks();
   await rescoreMcp();
   console.log(
     DRY_RUN
       ? `Done (dry run). ${skipped} scores would be written.`
-      : `Done. ${created} scores written, ${skipped} already present (skipped).`,
+      : `Done. ${created} scores upserted.`,
   );
 })().catch((err) => {
   console.error("Re-score job failed:", err);
