@@ -18,6 +18,10 @@ on:
         description: "Set to 1 to log without writing"
         required: false
         default: "0"
+      floor_iso:
+        description: "Override earliest subject start time (FLOOR_ISO). Leave blank for the safe default."
+        required: false
+        default: ""
 
 concurrency:
   group: rescore-derived-dimensions
@@ -38,4 +42,5 @@ jobs:
           LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
           LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '72' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
+          FLOOR_ISO: ${{ github.event.inputs.floor_iso || '' }}
         run: node scripts/rescore-derived-dimensions.mjs
