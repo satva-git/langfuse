@@ -1,68 +1,67 @@
 #!/usr/bin/env node
-// Keep the MCP Adoption and Claude Framework Governance dashboards current.
+// Keep the MCP Adoption and Claude Framework Governance dashboards current AND
+// correctly dated.
 //
 // Those dashboards group on categorical SCORES (mcp_name, framework_name,
-// framework_skill) that must be written onto each trace/observation. Langfuse
-// widgets cannot regex-extract live, and the DB-layer DEFAULT-column enrichment
-// (ClickHouse migration 0049) only exists in the fork build -- production runs
-// the official images, so nothing scores new data automatically.
-//
-// This job re-runs the backfill logic from langfuse-dashboards/README.md over a
-// recent window and writes the missing scores. Design notes:
+// framework_skill) written onto each trace/observation. Two facts shape this job:
 //
 //   * events_only mode: this Langfuse v4 deployment runs in "events_only" mode,
-//     where the legacy list endpoints (/api/public/traces, /observations,
-//     /scores, /metrics) all return 404. The ONLY reader available is
-//     GET /api/public/v2/observations (cursor-based). POST /api/public/scores
-//     still works. So we read observations via v2 and cannot list scores.
-//   * Idempotency: every score uses a DETERMINISTIC id, so re-runs upsert.
-//   * No double-count vs the one-time 2026-09-21 backfill (whose scores carry
-//     random ids and cannot be listed here): FLOOR_ISO bounds the scan so we
-//     never touch a subject the backfill already covered. The floor sits just
-//     after the manually-scored gsd trace, so that trace keeps its single score
-//     and the job owns everything created after the floor.
+//     where the legacy list endpoints (/traces, /observations, /scores, /metrics)
+//     return 404. The only reader is GET /api/public/v2/observations (cursor).
+//   * A score's timeline position = its ingestion EVENT timestamp (IngestionService
+//     stamps score.timestamp from the event envelope). POST /api/public/scores
+//     sends "now", which is why a backfill piles all history onto the backfill date.
+//     So we WRITE via POST /api/public/ingestion with each event's timestamp set to
+//     the observation's real startTime -> scores land on the real call date.
+//
+// Idempotency: every score uses a DETERMINISTIC id (name_subject_value), so
+// re-runs upsert. Re-ingesting the same id with a real event timestamp also
+// corrects the date of a score written earlier.
+//
+// MODES:
+//   (default) score  -- scan observations in [floor..now] and (re)write derived
+//                       scores via ingestion, stamped at the observation startTime.
+//   delete           -- read LEGACY_IDS_FILE (JSON array of score ids) and DELETE
+//                       each. Used once to remove the original random-id backfill
+//                       scores after the accurate deterministic set is rebuilt.
 //
 // Env:
-//   LANGFUSE_HOST          e.g. https://langfuse.satva.xyz   (required)
-//   LANGFUSE_PUBLIC_KEY    pk-...                             (required)
-//   LANGFUSE_SECRET_KEY    sk-...                             (required)
-//   LOOKBACK_HOURS         window to scan, default 72
-//   FLOOR_ISO              earliest subject start time to score,
-//                          default 2026-09-22T05:00:00Z (see note above)
-//   DRY_RUN                "1" to log what would be written without writing
+//   LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY  (required)
+//   MODE              "score" (default) | "delete"
+//   LOOKBACK_HOURS    window to scan, default 72
+//   FLOOR_ISO         earliest subject startTime to score, default 2026-09-22T05:00:00Z
+//   LEGACY_IDS_FILE   path to JSON id array (delete mode), default scripts/legacy-score-ids.json
+//   SKIP_FRAMEWORKS / SKIP_MCP   "1" to skip that half (one-off scoping)
+//   DRY_RUN           "1" to log without writing/deleting
+
+import { readFileSync } from "node:fs";
 
 const HOST = (process.env.LANGFUSE_HOST || "").replace(/\/+$/, "");
 const PUBLIC_KEY = process.env.LANGFUSE_PUBLIC_KEY || "";
 const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || "";
+const MODE = (process.env.MODE || "score").toLowerCase();
 const LOOKBACK_HOURS = Number(process.env.LOOKBACK_HOURS || 72);
 const FLOOR_ISO = process.env.FLOOR_ISO || "2026-09-22T05:00:00Z";
-const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
-// Optional one-off scoping (used for the controlled gap-fill backfill; the
-// hourly run leaves both off so it scores frameworks and MCP together).
+const LEGACY_IDS_FILE = process.env.LEGACY_IDS_FILE || "scripts/legacy-score-ids.json";
 const SKIP_FRAMEWORKS = process.env.SKIP_FRAMEWORKS === "1" || process.env.SKIP_FRAMEWORKS === "true";
 const SKIP_MCP = process.env.SKIP_MCP === "1" || process.env.SKIP_MCP === "true";
+const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 
 if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
-  console.error(
-    "Missing env: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY are all required.",
-  );
+  console.error("Missing env: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY are all required.");
   process.exit(1);
 }
 
-const AUTH =
-  "Basic " + Buffer.from(`${PUBLIC_KEY}:${SECRET_KEY}`).toString("base64");
+const AUTH = "Basic " + Buffer.from(`${PUBLIC_KEY}:${SECRET_KEY}`).toString("base64");
 const now = new Date();
 const floor = new Date(FLOOR_ISO);
 const lookbackFrom = new Date(now.getTime() - LOOKBACK_HOURS * 3600 * 1000);
-const from = lookbackFrom > floor ? lookbackFrom : floor; // never earlier than the floor
+const from = lookbackFrom > floor ? lookbackFrom : floor;
 const fromISO = from.toISOString();
 const toISO = now.toISOString();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- Parsing rules (see langfuse-dashboards/README.md section 1) -------------
-
-// Framework tag: strip optional "subagent-" prefix; it is a framework tag only
-// if it then starts with "skill:" AND contains a second colon.
-// skill:<framework>:<skill>  ->  { framework, skill }
 function parseFrameworkTag(rawTag) {
   const tag = rawTag.startsWith("subagent-") ? rawTag.slice("subagent-".length) : rawTag;
   if (!tag.startsWith("skill:")) return null;
@@ -73,29 +72,19 @@ function parseFrameworkTag(rawTag) {
   if (!framework || !skill) return null;
   return { framework, skill };
 }
-
-// MCP tool call: observation name "Tool: mcp__<server>__<tool>".
-// server = segment between the first and second "__".
 function parseMcpServer(name) {
   if (typeof name !== "string" || !name.startsWith("Tool: mcp__")) return null;
   const segs = name.split("__");
   if (segs.length < 3) return null;
   return segs[1] || null;
 }
-
-// Deterministic, id-safe score id so re-runs upsert instead of duplicating.
+// Deterministic, id-safe score id -> re-runs upsert instead of duplicating.
 function scoreId(kind, subjectId, value) {
-  return `${kind}|${subjectId}|${value}`.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 200);
+  return `${kind}_${subjectId}_${value}`.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 200);
 }
 
-// ---- Langfuse public API helpers --------------------------------------------
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Retry transient failures (network errors, 429, and 5xx incl. 502/504 that
-// occur while langfuse-web restarts on a Coolify redeploy). Non-transient 4xx
-// fail fast. Deterministic score ids make retried writes safe.
-async function fetchWithRetry(url, init, label, tries = 5) {
+// ---- HTTP with retry on transient 5xx/network (deploy restarts) --------------
+async function fetchWithRetry(url, init, label, tries = 6) {
   let lastErr;
   for (let attempt = 1; attempt <= tries; attempt++) {
     try {
@@ -106,10 +95,10 @@ async function fetchWithRetry(url, init, label, tries = 5) {
       if (!transient) throw new Error(`${label} -> ${res.status} ${bodyText}`);
       lastErr = new Error(`${label} -> ${res.status} ${bodyText}`);
     } catch (err) {
-      lastErr = err; // network/DNS/timeout -> transient
+      lastErr = err;
       if (err.message && err.message.includes(" -> 4")) throw err;
     }
-    if (attempt < tries) await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000));
+    if (attempt < tries) await sleep(Math.min(1000 * 2 ** (attempt - 1), 20000));
   }
   throw lastErr;
 }
@@ -119,11 +108,7 @@ async function apiGet(path, params) {
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   }
-  const res = await fetchWithRetry(
-    url,
-    { headers: { Authorization: AUTH } },
-    `GET ${url.pathname}`,
-  );
+  const res = await fetchWithRetry(url, { headers: { Authorization: AUTH } }, `GET ${url.pathname}`);
   return res.json();
 }
 
@@ -145,49 +130,61 @@ async function* observations(extraParams) {
   }
 }
 
+// ---- Buffered ingestion writer (accurate score timestamps) ------------------
 let created = 0;
-let skipped = 0;
+let buffer = [];
+const BATCH = 100;
 
-async function upsertScore({ id, name, value, traceId, observationId, comment }) {
+function toIsoOffset(startTime) {
+  // v2 returns ISO already (…Z). Guard against a bare value.
+  const d = new Date(startTime);
+  return isNaN(d.getTime()) ? now.toISOString() : d.toISOString();
+}
+
+async function flush() {
+  if (buffer.length === 0) return;
+  const batch = buffer;
+  buffer = [];
   if (DRY_RUN) {
-    console.log(`[dry-run] ${name}=${value} trace=${traceId}${observationId ? " obs=" + observationId : ""}`);
-    skipped += 1;
+    created += batch.length;
     return;
   }
-  // The public-scores body has no `source` field -- the server stamps source=API
-  // for public-API ingestion automatically (see PostScoreBodyFoundationSchema).
-  const payload = {
+  await fetchWithRetry(
+    `${HOST}/api/public/ingestion`,
+    {
+      method: "POST",
+      headers: { Authorization: AUTH, "Content-Type": "application/json" },
+      body: JSON.stringify({ batch }),
+    },
+    `POST /ingestion (${batch.length} scores)`,
+  );
+  created += batch.length;
+}
+
+async function writeScore({ id, name, value, traceId, observationId, startTime, comment }) {
+  const body = {
     id,
     name,
     value,
     dataType: "CATEGORICAL",
     traceId,
     environment: "default",
-    comment: comment || "scheduled re-score: extracted from trace tags / tool names",
+    comment: comment || "scheduled re-score (accurate timestamp)",
   };
-  if (observationId) payload.observationId = observationId;
-  await fetchWithRetry(
-    `${HOST}/api/public/scores`,
-    {
-      method: "POST",
-      headers: { Authorization: AUTH, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    `POST /scores (${name}=${value})`,
-  );
-  created += 1;
+  if (observationId) body.observationId = observationId;
+  buffer.push({
+    id: `evt_${id}`,
+    timestamp: toIsoOffset(startTime), // event timestamp -> score.timestamp -> real call date
+    type: "score-create",
+    body,
+  });
+  if (buffer.length >= BATCH) await flush();
 }
 
 // ---- Frameworks: one score per (trace, framework) and (trace, skill) --------
-// Root observations carry the trace's tags via the trace_context field group,
-// so one root observation per trace gives us the framework tags trace-scoped.
-
 async function rescoreFrameworks() {
   let traces = 0;
-  for await (const obs of observations({
-    isRootObservation: "true",
-    fields: "basic,trace_context",
-  })) {
+  for await (const obs of observations({ isRootObservation: "true", fields: "basic,trace_context" })) {
     const traceId = obs.traceId;
     const tags = Array.isArray(obs.tags) ? obs.tags : [];
     if (!traceId) continue;
@@ -202,60 +199,72 @@ async function rescoreFrameworks() {
     if (frameworks.size === 0) continue;
     traces += 1;
     for (const framework of frameworks) {
-      await upsertScore({
-        id: scoreId("framework_name", traceId, framework),
-        name: "framework_name",
-        value: framework,
-        traceId,
-      });
+      await writeScore({ id: scoreId("framework_name", traceId, framework), name: "framework_name", value: framework, traceId, startTime: obs.startTime });
     }
     for (const skill of skills) {
-      await upsertScore({
-        id: scoreId("framework_skill", traceId, skill),
-        name: "framework_skill",
-        value: skill,
-        traceId,
-      });
+      await writeScore({ id: scoreId("framework_skill", traceId, skill), name: "framework_skill", value: skill, traceId, startTime: obs.startTime });
     }
   }
   console.log(`Frameworks: scanned ${traces} framework-tagged traces in the window.`);
 }
 
 // ---- MCP: one score per TOOL observation named "Tool: mcp__server__tool" ----
-
 async function rescoreMcp() {
   let calls = 0;
   for await (const obs of observations({ type: "TOOL", fields: "basic" })) {
     const server = parseMcpServer(obs.name);
     if (!server || !obs.traceId) continue;
     calls += 1;
-    await upsertScore({
+    await writeScore({
       id: scoreId("mcp_name", obs.id, server),
       name: "mcp_name",
       value: server,
       traceId: obs.traceId,
       observationId: obs.id,
-      comment: "scheduled re-score: extracted from tool name",
+      startTime: obs.startTime,
+      comment: "scheduled re-score: extracted from tool name (accurate timestamp)",
     });
   }
   console.log(`MCP: scanned ${calls} mcp__ tool-call observations in the window.`);
 }
 
-// ---- Main -------------------------------------------------------------------
+// ---- Delete mode: remove legacy (random-id) scores by id --------------------
+async function deleteLegacy() {
+  let ids;
+  try {
+    ids = JSON.parse(readFileSync(LEGACY_IDS_FILE, "utf8"));
+  } catch (err) {
+    throw new Error(`Could not read LEGACY_IDS_FILE ${LEGACY_IDS_FILE}: ${err.message}`);
+  }
+  if (!Array.isArray(ids)) throw new Error("LEGACY_IDS_FILE must contain a JSON array of score ids.");
+  console.log(`Delete mode: ${ids.length} legacy score ids to remove${DRY_RUN ? " [DRY RUN]" : ""}.`);
+  let deleted = 0;
+  for (const id of ids) {
+    if (DRY_RUN) { deleted += 1; continue; }
+    await fetchWithRetry(
+      `${HOST}/api/public/scores/${encodeURIComponent(id)}`,
+      { method: "DELETE", headers: { Authorization: AUTH } },
+      `DELETE /scores/${id}`,
+    );
+    deleted += 1;
+    if (deleted % 100 === 0) console.log(`  deleted ${deleted}/${ids.length}`);
+  }
+  console.log(`Delete: ${deleted} scores deleted.`);
+}
 
+// ---- Main -------------------------------------------------------------------
 (async () => {
-  console.log(
-    `Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${DRY_RUN ? " [DRY RUN]" : ""}`,
-  );
+  if (MODE === "delete") {
+    await deleteLegacy();
+    return;
+  }
+  console.log(`Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${DRY_RUN ? " [DRY RUN]" : ""}`);
   if (SKIP_FRAMEWORKS) console.log("Frameworks: skipped (SKIP_FRAMEWORKS).");
   else await rescoreFrameworks();
   if (SKIP_MCP) console.log("MCP: skipped (SKIP_MCP).");
   else await rescoreMcp();
-  console.log(
-    DRY_RUN
-      ? `Done (dry run). ${skipped} scores would be written.`
-      : `Done. ${created} scores upserted.`,
-  );
+  await flush();
+  console.log(DRY_RUN ? `Done (dry run). ${created} scores would be written.` : `Done. ${created} scores ingested (stamped at real call time).`);
 })().catch((err) => {
   console.error("Re-score job failed:", err);
   process.exit(1);
