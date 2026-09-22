@@ -90,15 +90,40 @@ function scoreId(kind, subjectId, value) {
 
 // ---- Langfuse public API helpers --------------------------------------------
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Retry transient failures (network errors, 429, and 5xx incl. 502/504 that
+// occur while langfuse-web restarts on a Coolify redeploy). Non-transient 4xx
+// fail fast. Deterministic score ids make retried writes safe.
+async function fetchWithRetry(url, init, label, tries = 5) {
+  let lastErr;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      if (res.ok) return res;
+      const transient = res.status === 429 || res.status >= 500;
+      const bodyText = await res.text();
+      if (!transient) throw new Error(`${label} -> ${res.status} ${bodyText}`);
+      lastErr = new Error(`${label} -> ${res.status} ${bodyText}`);
+    } catch (err) {
+      lastErr = err; // network/DNS/timeout -> transient
+      if (err.message && err.message.includes(" -> 4")) throw err;
+    }
+    if (attempt < tries) await sleep(Math.min(1000 * 2 ** (attempt - 1), 15000));
+  }
+  throw lastErr;
+}
+
 async function apiGet(path, params) {
   const url = new URL(`${HOST}${path}`);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url, { headers: { Authorization: AUTH } });
-  if (!res.ok) {
-    throw new Error(`GET ${url.pathname} -> ${res.status} ${await res.text()}`);
-  }
+  const res = await fetchWithRetry(
+    url,
+    { headers: { Authorization: AUTH } },
+    `GET ${url.pathname}`,
+  );
   return res.json();
 }
 
@@ -141,14 +166,15 @@ async function upsertScore({ id, name, value, traceId, observationId, comment })
     comment: comment || "scheduled re-score: extracted from trace tags / tool names",
   };
   if (observationId) payload.observationId = observationId;
-  const res = await fetch(`${HOST}/api/public/scores`, {
-    method: "POST",
-    headers: { Authorization: AUTH, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    throw new Error(`POST /scores (${name}=${value}) -> ${res.status} ${await res.text()}`);
-  }
+  await fetchWithRetry(
+    `${HOST}/api/public/scores`,
+    {
+      method: "POST",
+      headers: { Authorization: AUTH, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    `POST /scores (${name}=${value})`,
+  );
   created += 1;
 }
 
