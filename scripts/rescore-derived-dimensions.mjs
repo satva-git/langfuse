@@ -37,6 +37,10 @@ const SECRET_KEY = process.env.LANGFUSE_SECRET_KEY || "";
 const LOOKBACK_HOURS = Number(process.env.LOOKBACK_HOURS || 72);
 const FLOOR_ISO = process.env.FLOOR_ISO || "2026-09-22T05:00:00Z";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+// Optional one-off scoping (used for the controlled gap-fill backfill; the
+// hourly run leaves both off so it scores frameworks and MCP together).
+const SKIP_FRAMEWORKS = process.env.SKIP_FRAMEWORKS === "1" || process.env.SKIP_FRAMEWORKS === "true";
+const SKIP_MCP = process.env.SKIP_MCP === "1" || process.env.SKIP_MCP === "true";
 
 if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
   console.error(
@@ -217,8 +221,10 @@ async function rescoreMcp() {
   console.log(
     `Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${DRY_RUN ? " [DRY RUN]" : ""}`,
   );
-  await rescoreFrameworks();
-  await rescoreMcp();
+  if (SKIP_FRAMEWORKS) console.log("Frameworks: skipped (SKIP_FRAMEWORKS).");
+  else await rescoreFrameworks();
+  if (SKIP_MCP) console.log("MCP: skipped (SKIP_MCP).");
+  else await rescoreMcp();
   console.log(
     DRY_RUN
       ? `Done (dry run). ${skipped} scores would be written.`

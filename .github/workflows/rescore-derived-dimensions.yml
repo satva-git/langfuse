@@ -22,6 +22,14 @@ on:
         description: "Override earliest subject start time (FLOOR_ISO). Leave blank for the safe default."
         required: false
         default: ""
+      skip_frameworks:
+        description: "Set to 1 to score MCP only (used for the one-off gap-fill)."
+        required: false
+        default: "0"
+      skip_mcp:
+        description: "Set to 1 to score frameworks only."
+        required: false
+        default: "0"
 
 concurrency:
   group: rescore-derived-dimensions
@@ -43,4 +51,6 @@ jobs:
           LOOKBACK_HOURS: ${{ github.event.inputs.lookback_hours || '72' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || '0' }}
           FLOOR_ISO: ${{ github.event.inputs.floor_iso || '' }}
+          SKIP_FRAMEWORKS: ${{ github.event.inputs.skip_frameworks || '0' }}
+          SKIP_MCP: ${{ github.event.inputs.skip_mcp || '0' }}
         run: node scripts/rescore-derived-dimensions.mjs
