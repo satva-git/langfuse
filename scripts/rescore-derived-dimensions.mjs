@@ -3,7 +3,8 @@
 // correctly dated.
 //
 // Those dashboards group on categorical SCORES (mcp_name, framework_name,
-// framework_skill) written onto each trace/observation. Two facts shape this job:
+// framework_skill, plus the curated buckets mcp_bucket / framework_bucket)
+// written onto each trace/observation. Two facts shape this job:
 //
 //   * events_only mode: this Langfuse v4 deployment runs in "events_only" mode,
 //     where the legacy list endpoints (/traces, /observations, /scores, /metrics)
@@ -32,6 +33,9 @@
 //   FLOOR_ISO         earliest subject startTime to score, default 2026-09-22T05:00:00Z
 //   LEGACY_IDS_FILE   path to JSON id array (delete mode), default scripts/legacy-score-ids.json
 //   SKIP_FRAMEWORKS / SKIP_MCP   "1" to skip that half (one-off scoping)
+//   BUCKETS_ONLY      "1" to write ONLY mcp_bucket/framework_bucket (not base
+//                     scores) -- use with a low FLOOR_ISO to backfill buckets over
+//                     full history without double-counting existing base scores.
 //   DRY_RUN           "1" to log without writing/deleting
 
 import { readFileSync } from "node:fs";
@@ -45,6 +49,11 @@ const FLOOR_ISO = process.env.FLOOR_ISO || "2026-09-22T05:00:00Z";
 const LEGACY_IDS_FILE = process.env.LEGACY_IDS_FILE || "scripts/legacy-score-ids.json";
 const SKIP_FRAMEWORKS = process.env.SKIP_FRAMEWORKS === "1" || process.env.SKIP_FRAMEWORKS === "true";
 const SKIP_MCP = process.env.SKIP_MCP === "1" || process.env.SKIP_MCP === "true";
+// BUCKETS_ONLY: write ONLY the curated mcp_bucket / framework_bucket scores, not the
+// base mcp_name/framework_name/framework_skill scores. Use with a low FLOOR_ISO to
+// backfill buckets over full history WITHOUT re-writing (and double-counting against
+// the original random-id) the base scores that already exist there.
+const BUCKETS_ONLY = process.env.BUCKETS_ONLY === "1" || process.env.BUCKETS_ONLY === "true";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
 
 if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
@@ -78,10 +87,69 @@ function parseMcpServer(name) {
   if (segs.length < 3) return null;
   return segs[1] || null;
 }
+// A BARE skill tag: `skill:<name>` (exactly one colon, optional subagent- prefix).
+// These are excluded from framework_name (they're personal/global skills), but a
+// subset of them ARE gstack commands -> used for GStack bucket detection below.
+function parseBareSkill(rawTag) {
+  const tag = rawTag.startsWith("subagent-") ? rawTag.slice("subagent-".length) : rawTag;
+  if (!tag.startsWith("skill:")) return null;
+  const parts = tag.split(":");
+  if (parts.length !== 2) return null; // exactly skill:<name>
+  return parts[1] || null;
+}
 // Deterministic, id-safe score id -> re-runs upsert instead of duplicating.
 function scoreId(kind, subjectId, value) {
   return `${kind}_${subjectId}_${value}`.replace(/[^a-zA-Z0-9_.-]/g, "_").slice(0, 200);
 }
+
+// ---- Curated buckets (see langfuse-dashboards/README.md section 1.5) ---------
+// mcp_bucket: raw mcp_name server segment -> tracked business display name, else "Other".
+// Confirmed from live discovery (2026-09-22). satva-/claude_ai_Satva- prefixed servers
+// are the real Satva integrations; lookalikes without that prefix (Basecamp,
+// claude_ai_Gmail, ...) are DISTINCT servers and fall to Other by design.
+const MCP_BUCKET_MAP = {
+  claude_ai_Google_sheets: "Satva Google Sheets",
+  "claude_ai_Satva-basecamp": "Satva Basecamp",
+  claude_ai_Google_Drive: "Satva Google Drive",
+  "satva-gmail": "Satva Gmail",
+  "satva-zoho": "Satva Zoho",
+  // Aspirational canonical MCPs with no data yet. Identifiers predicted from this
+  // org's connected servers; verify/adjust when the first real call lands.
+  claude_ai_Pipedrive_MCP: "Satva Pipedrive",
+  playwright: "Playwright MCP",
+  // TODO (confirm raw id on first appearance): Satva Xero, Satva QuickBooks,
+  // Satva Shopify, SyncTools Shopify, Satva Linnworks, Satva Google Docs,
+  // Satva Google Slides, Satva Google Analytics, Satva Freepik, Satva Instantly,
+  // Playwright Codegen MCP.
+};
+function mcpBucket(server) {
+  return MCP_BUCKET_MAP[server] || "Other";
+}
+
+// framework_bucket: raw framework_name -> one of the five canonical, else "Other".
+const FRAMEWORK_DISPLAY = { gsd: "GSD", sat: "SAT", gstack: "GStack", ecc: "ECC", superpowers: "Superpowers" };
+function frameworkBucket(framework) {
+  return FRAMEWORK_DISPLAY[String(framework).toLowerCase()] || "Other";
+}
+
+// GStack does NOT tag runs as skill:gstack:*. It surfaces as BARE skill:<command>
+// tags whose name is one of its installed commands. Ground truth = the actual
+// install (~/.claude/skills/gstack/ command folders + the _gstack-command router),
+// confirmed 2026-09-22 (supersedes the stale master-prompt list). Detection is exact
+// tag-segment membership, so common words (review/ship/qa) can't false-positive on
+// free text.
+const GSTACK_COMMANDS = new Set([
+  "autoplan", "benchmark", "benchmark-models", "browse", "canary", "careful",
+  "codex", "context-restore", "context-save", "cso", "design-consultation",
+  "design-html", "design-review", "design-shotgun", "devex-review",
+  "document-generate", "document-release", "freeze", "gstack-upgrade", "guard",
+  "health", "investigate", "ios-clean", "ios-design-review", "ios-fix", "ios-qa",
+  "ios-sync", "land-and-deploy", "landing-report", "learn", "make-pdf",
+  "office-hours", "open-gstack-browser", "pair-agent", "plan-ceo-review",
+  "plan-design-review", "plan-devex-review", "plan-eng-review", "plan-tune", "qa",
+  "qa-only", "retro", "review", "scrape", "setup-browser-cookies", "setup-deploy",
+  "setup-gbrain", "ship", "skillify", "sync-gbrain", "unfreeze", "_gstack-command",
+]);
 
 // ---- HTTP with retry on transient 5xx/network (deploy restarts) --------------
 async function fetchWithRetry(url, init, label, tries = 6) {
@@ -190,19 +258,33 @@ async function rescoreFrameworks() {
     if (!traceId) continue;
     const frameworks = new Set();
     const skills = new Set();
+    const buckets = new Set();
     for (const tag of tags) {
       const parsed = parseFrameworkTag(tag);
-      if (!parsed) continue;
-      frameworks.add(parsed.framework);
-      skills.add(parsed.skill);
+      if (parsed) {
+        frameworks.add(parsed.framework);
+        skills.add(parsed.skill);
+        buckets.add(frameworkBucket(parsed.framework));
+        continue;
+      }
+      // Not a framework tag -> maybe a bare gstack command tag (skill:<cmd>).
+      const bare = parseBareSkill(tag);
+      if (bare && GSTACK_COMMANDS.has(bare)) buckets.add("GStack");
     }
-    if (frameworks.size === 0) continue;
+    // A trace counts if it carries any framework tag OR any detected bucket
+    // (the latter picks up gstack-only traces that carry no skill:X:Y tag).
+    if (frameworks.size === 0 && buckets.size === 0) continue;
     traces += 1;
-    for (const framework of frameworks) {
-      await writeScore({ id: scoreId("framework_name", traceId, framework), name: "framework_name", value: framework, traceId, startTime: obs.startTime });
+    if (!BUCKETS_ONLY) {
+      for (const framework of frameworks) {
+        await writeScore({ id: scoreId("framework_name", traceId, framework), name: "framework_name", value: framework, traceId, startTime: obs.startTime });
+      }
+      for (const skill of skills) {
+        await writeScore({ id: scoreId("framework_skill", traceId, skill), name: "framework_skill", value: skill, traceId, startTime: obs.startTime });
+      }
     }
-    for (const skill of skills) {
-      await writeScore({ id: scoreId("framework_skill", traceId, skill), name: "framework_skill", value: skill, traceId, startTime: obs.startTime });
+    for (const bucket of buckets) {
+      await writeScore({ id: scoreId("framework_bucket", traceId, bucket), name: "framework_bucket", value: bucket, traceId, startTime: obs.startTime });
     }
   }
   console.log(`Frameworks: scanned ${traces} framework-tagged traces in the window.`);
@@ -215,14 +297,26 @@ async function rescoreMcp() {
     const server = parseMcpServer(obs.name);
     if (!server || !obs.traceId) continue;
     calls += 1;
+    if (!BUCKETS_ONLY) {
+      await writeScore({
+        id: scoreId("mcp_name", obs.id, server),
+        name: "mcp_name",
+        value: server,
+        traceId: obs.traceId,
+        observationId: obs.id,
+        startTime: obs.startTime,
+        comment: "scheduled re-score: extracted from tool name (accurate timestamp)",
+      });
+    }
+    const bucket = mcpBucket(server);
     await writeScore({
-      id: scoreId("mcp_name", obs.id, server),
-      name: "mcp_name",
-      value: server,
+      id: scoreId("mcp_bucket", obs.id, bucket),
+      name: "mcp_bucket",
+      value: bucket,
       traceId: obs.traceId,
       observationId: obs.id,
       startTime: obs.startTime,
-      comment: "scheduled re-score: extracted from tool name (accurate timestamp)",
+      comment: "scheduled re-score: curated bucket (tracked business MCP or Other)",
     });
   }
   console.log(`MCP: scanned ${calls} mcp__ tool-call observations in the window.`);
@@ -258,7 +352,7 @@ async function deleteLegacy() {
     await deleteLegacy();
     return;
   }
-  console.log(`Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${DRY_RUN ? " [DRY RUN]" : ""}`);
+  console.log(`Re-score window ${fromISO} .. ${toISO} (lookback ${LOOKBACK_HOURS}h, floor ${floor.toISOString()})${BUCKETS_ONLY ? " [BUCKETS_ONLY]" : ""}${DRY_RUN ? " [DRY RUN]" : ""}`);
   if (SKIP_FRAMEWORKS) console.log("Frameworks: skipped (SKIP_FRAMEWORKS).");
   else await rescoreFrameworks();
   if (SKIP_MCP) console.log("MCP: skipped (SKIP_MCP).");
