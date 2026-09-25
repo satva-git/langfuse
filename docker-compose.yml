@@ -150,21 +150,6 @@ services:
       - "traefik.http.routers.lf-mcp-block.service=lf-mcp-block-svc"
       - "traefik.http.services.lf-mcp-block-svc.loadbalancer.server.port=3000"
 
-  obot-mcp-tunnel:
-    # Outbound-only connector: lets Obot (on a different server) reach the
-    # Langfuse MCP endpoint privately via http://langfuse-web:3000, without
-    # opening any inbound port on this server. See OBOT_BASE_URL/OBOT_TUNNEL_TOKEN
-    # below - set these in Coolify's environment variables, not in this file.
-    image: ghcr.io/obot-platform/obot:v0.26.0
-    restart: always
-    depends_on:
-      langfuse-web:
-        condition: service_started
-    command: >
-      tunnel
-      --obot-base-url ${OBOT_BASE_URL:?set OBOT_BASE_URL to https://<your-obot-domain>/api}
-      --token ${OBOT_TUNNEL_TOKEN:?set OBOT_TUNNEL_TOKEN to the secret from MCP Management > MCP Tunnels}
-
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
     restart: always
