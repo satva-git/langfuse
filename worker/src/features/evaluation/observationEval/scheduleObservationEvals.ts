@@ -15,10 +15,12 @@ import {
   logger,
 } from "@langfuse/shared/src/server";
 import {
+  EvalTemplateType,
   JobExecutionStatus,
   type FilterState,
   type EvalExecutionMode,
   canRunEvalRule,
+  coerceLegacyEmptyMetadataFilters,
   mapEventEvalFilterColumnIdToField,
   observationVariableMappingList,
 } from "@langfuse/shared";
@@ -307,20 +309,24 @@ function getExecutableAssignments(
   rule: ObservationEvalRule,
 ): ScheduledObservationEvalAssignment[] {
   if (!("assignments" in rule)) {
-    return rule.evalTemplateId
-      ? [
-          {
-            id: rule.id,
-            evaluatorId: null,
-            evaluationRuleId: null,
-            evalTemplateId: rule.evalTemplateId,
-            evaluatorType: rule.evalTemplate.type,
-          },
-        ]
-      : [];
+    if (
+      !rule.evalTemplateId ||
+      rule.evalTemplate.type === EvalTemplateType.FACET
+    )
+      return [];
+    return [
+      {
+        id: rule.id,
+        evaluatorId: null,
+        evaluationRuleId: null,
+        evalTemplateId: rule.evalTemplateId,
+        evaluatorType: rule.evalTemplate.type,
+      },
+    ];
   }
 
   return rule.assignments.flatMap((assignment) => {
+    if (assignment.evaluator.type === EvalTemplateType.FACET) return [];
     // Blocked evaluators are already excluded by the query; this guards the
     // tenant boundary for callers that build assignments by hand.
     if (assignment.evaluator.projectId !== rule.projectId) {
@@ -360,7 +366,9 @@ function evaluateFilter(
   observation: ObservationForEval,
   config: ObservationEvalRule,
 ): boolean {
-  const filterConditions = config.filter as FilterState;
+  const filterConditions = coerceLegacyEmptyMetadataFilters(
+    config.filter,
+  ) as FilterState;
 
   // Empty filter matches all (for filter purposes)
   const isEmptyFilter =

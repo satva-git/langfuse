@@ -1,4 +1,5 @@
-import React, { useCallback, useRef } from "react";
+/* eslint-disable no-nested-ternary */
+import React, { useCallback, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
@@ -36,9 +37,12 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/src/components/ui/tooltip";
-import { InlineFilterState } from "@/src/features/filters/components/filter-builder";
-import { ComposerTokens } from "@/src/features/search-bar/components/ComposerTokens";
-import { filterStateToQueryText } from "@/src/features/search-bar/lib/filter-state-to-query";
+import { InlineFilterState } from "@/src/features/filters";
+import {
+  ComposerTokens,
+  filterStateToQueryText,
+} from "@/src/features/search-bar";
+
 import { formatIntervalSeconds } from "@/src/utils/dates";
 import { cn } from "@/src/utils/tailwind";
 
@@ -233,13 +237,11 @@ const TurnCard = React.memo(
       sidebarTrace;
     const isTraceLevelIOOnly =
       hasMatchingTraceLevelIO && observations?.length === 0;
-    let observationListClassName = "-mx-1";
-    if (observations?.length) {
-      observationListClassName = "mt-2";
-    }
-    if (isTraceLevelIOOnly) {
-      observationListClassName = "-mx-1 mt-2";
-    }
+    const observationListClassName = useMemo(() => {
+      if (isTraceLevelIOOnly) return "-mx-1 mt-2";
+      if (observations?.length) return "mt-2";
+      return "-mx-1";
+    }, [isTraceLevelIOOnly, observations?.length]);
 
     return (
       <div
@@ -441,7 +443,7 @@ export function ModernSessionSidebar(
         role="complementary"
         aria-label="Session observations"
         aria-busy="true"
-        className="bg-background relative flex h-full min-h-0 flex-col border-r"
+        className="bg-background session-review-stack:border-r-0 session-review-stack:border-b relative flex h-full min-h-0 flex-col border-r"
       >
         <div className="flex shrink-0 items-center border-b px-2 py-2.5">
           <div className="bg-muted h-7 flex-1 animate-pulse rounded-sm" />
@@ -498,7 +500,7 @@ export function ModernSessionSidebar(
     <div
       role="complementary"
       aria-label="Session observations"
-      className="bg-background relative flex h-full min-h-0 flex-col border-r"
+      className="bg-background session-review-stack:border-r-0 session-review-stack:border-b relative flex h-full min-h-0 flex-col border-r"
     >
       <div className="shrink-0 border-b">
         <div className="flex items-center gap-1 px-2 py-2.5">

@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { type FilterState } from "@langfuse/shared";
 
 import {
@@ -88,12 +88,6 @@ export function ConnectedModernSessionBodyTimeline({
   const baseFilters: FilterState = [
     ...filterState,
     {
-      column: "sessionId",
-      type: "string",
-      operator: "=",
-      value: sessionId,
-    },
-    {
       column: "startTime",
       type: "datetime",
       operator: ">=",
@@ -114,27 +108,37 @@ export function ConnectedModernSessionBodyTimeline({
       filter.value,
   );
 
-  const traceIndexById = new Map(
-    traces.map((trace, index) => [trace.id, index] as const),
+  const traceIndexById = useMemo(
+    () => new Map(traces.map((trace, index) => [trace.id, index] as const)),
+    [traces],
   );
-  const activeChunkIndices = new Set<number>();
-  if (!searchQuery) {
-    let highestChunkIndex = Math.min(
-      loadedThroughChunkIndex,
-      Math.ceil(traces.length / SIDEBAR_TRACE_CHUNK_SIZE) - 1,
-    );
-    for (const traceId of visibleTraceIds) {
-      const traceIndex = traceIndexById.get(traceId);
-      if (traceIndex === undefined) continue;
-      highestChunkIndex = Math.max(
-        highestChunkIndex,
-        Math.floor(traceIndex / SIDEBAR_TRACE_CHUNK_SIZE),
+  const activeChunkIndices = useMemo(() => {
+    const activeChunkIndices = new Set<number>();
+    if (!searchQuery) {
+      let highestChunkIndex = Math.min(
+        loadedThroughChunkIndex,
+        Math.ceil(traces.length / SIDEBAR_TRACE_CHUNK_SIZE) - 1,
       );
+      for (const traceId of visibleTraceIds) {
+        const traceIndex = traceIndexById.get(traceId);
+        if (traceIndex === undefined) continue;
+        highestChunkIndex = Math.max(
+          highestChunkIndex,
+          Math.floor(traceIndex / SIDEBAR_TRACE_CHUNK_SIZE),
+        );
+      }
+      for (let chunkIndex = 0; chunkIndex <= highestChunkIndex; chunkIndex++) {
+        activeChunkIndices.add(chunkIndex);
+      }
     }
-    for (let chunkIndex = 0; chunkIndex <= highestChunkIndex; chunkIndex++) {
-      activeChunkIndices.add(chunkIndex);
-    }
-  }
+    return activeChunkIndices;
+  }, [
+    searchQuery,
+    loadedThroughChunkIndex,
+    traces.length,
+    visibleTraceIds,
+    traceIndexById,
+  ]);
 
   const queryDescriptors: Array<{
     key: string;
@@ -163,9 +167,10 @@ export function ConnectedModernSessionBodyTimeline({
 
   const observationQueries = api.useQueries((t) =>
     queryDescriptors.map((descriptor) =>
-      t.events.all(
+      t.events.sessionAll(
         {
           projectId,
+          sessionId,
           filter: descriptor.traceIds
             ? [
                 ...baseFilters,
@@ -197,7 +202,7 @@ export function ConnectedModernSessionBodyTimeline({
   >();
   const timelineObservationsByTraceId = new Map<
     string,
-    RouterOutputs["events"]["all"]["observations"]
+    RouterOutputs["events"]["sessionAll"]["observations"]
   >();
   const observationIdsByTraceId = new Map<string, Set<string>>();
   const traceIdsWithMatchingTraceLevelIO = new Set<string>();
@@ -269,14 +274,18 @@ export function ConnectedModernSessionBodyTimeline({
       lastRelevantQuery?.isPending || lastRelevantQuery?.data?.hasMore,
     );
     if (mayHaveMoreObservations) incompleteTimelineTraceIds.add(trace.id);
-    const observations =
-      isPending && !hasLoadedObservations
-        ? undefined
-        : isError
-          ? null
-          : mayHaveMoreObservations && !hasLoadedObservations
-            ? undefined
-            : (observationsByTraceId.get(trace.id) ?? []);
+    const observations = (() => {
+      if (isPending && !hasLoadedObservations) {
+        return undefined;
+      }
+      if (isError) {
+        return null;
+      }
+      if (mayHaveMoreObservations && !hasLoadedObservations) {
+        return undefined;
+      }
+      return observationsByTraceId.get(trace.id) ?? [];
+    })();
 
     if (
       searchQuery &&
@@ -378,13 +387,18 @@ export function ConnectedModernSessionBodyTimeline({
   const timelineTraces: ConnectedSessionConversationTimelineItem[] = traces.map(
     (trace, index) => {
       const sidebarTrace = sidebarTraceById.get(trace.id);
-      const observations =
-        sidebarTrace?.observations === null
-          ? null
-          : sidebarTrace?.observations === undefined ||
-              incompleteTimelineTraceIds.has(trace.id)
-            ? undefined
-            : (timelineObservationsByTraceId.get(trace.id) ?? []);
+      const observations = (() => {
+        if (sidebarTrace?.observations === null) {
+          return null;
+        }
+        if (
+          sidebarTrace?.observations === undefined ||
+          incompleteTimelineTraceIds.has(trace.id)
+        ) {
+          return undefined;
+        }
+        return timelineObservationsByTraceId.get(trace.id) ?? [];
+      })();
 
       return {
         trace,
@@ -409,7 +423,7 @@ export function ConnectedModernSessionBodyTimeline({
   };
 
   return (
-    <div className="bg-background relative grid min-h-0 flex-1 grid-rows-[minmax(10rem,13rem)_minmax(0,1fr)] gap-x-4 overflow-hidden lg:grid-cols-[clamp(200px,24vw,296px)_minmax(0,1fr)] lg:grid-rows-1">
+    <div className="bg-background session-review-stack:grid-rows-[minmax(7rem,9rem)_minmax(0,1fr)] session-review-stack:gap-x-0 relative grid min-h-0 flex-1 grid-rows-[minmax(10rem,13rem)_minmax(0,1fr)] gap-x-4 overflow-hidden @3xl/session-workspace:grid-cols-[clamp(200px,24cqw,296px)_minmax(0,1fr)] @3xl/session-workspace:grid-rows-1">
       {tracesState.type === "loading" ? (
         <ModernSessionSidebar state="loading" />
       ) : (
@@ -436,7 +450,7 @@ export function ConnectedModernSessionBodyTimeline({
           }
         />
       )}
-      <div className="bg-card dark:bg-background relative min-h-0 min-w-[320px]">
+      <div className="bg-card dark:bg-background session-review-stack:min-w-0 relative min-h-0 min-w-[320px]">
         <ConnectedSessionConversationTimeline
           traces={timelineTraces}
           projectId={projectId}
@@ -447,6 +461,7 @@ export function ConnectedModernSessionBodyTimeline({
           openPeek={openPeek}
           controller={timelineController}
           scrollTarget={scrollTarget}
+          onClearFilters={sidebarFilterControls.onClearFilters}
           onFilterObservationByName={onFilterObservationByName}
           onLoadMoreObservations={
             hasMoreObservations && !isLoadingMoreObservations

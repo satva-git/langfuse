@@ -1,3 +1,4 @@
+/* eslint-disable no-nested-ternary */
 import { useMemo, useState } from "react";
 import {
   ChevronDown,
@@ -5,6 +6,7 @@ import {
   CircleAlert,
   FileWarning,
   Info,
+  type LucideIcon,
   MessageSquareOff,
   MoreHorizontal,
   TriangleAlert,
@@ -14,6 +16,7 @@ import {
   type ParsedSessionTimelineObservation,
   type PreparedSessionTimelineItem,
   type PreparedSessionTimelineMessages,
+  type SessionTimelineObservation,
 } from "@/src/features/sessions/SessionConversationTimeline/fns/prepareSessionTimelineObservations";
 import { SessionTimelineContentMessage } from "@/src/features/sessions/SessionConversationTimeline/components/SessionConversationTimelineTrace/components/SessionTimelineContentMessage/SessionTimelineContentMessage";
 import { SessionTimelineSystemMessage } from "@/src/features/sessions/SessionConversationTimeline/components/SessionConversationTimelineTrace/components/SessionTimelineSystemMessage/SessionTimelineSystemMessage";
@@ -32,10 +35,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/src/components/ui/tooltip";
+import { Tooltip as DSTooltip } from "@/src/components/design-system/Tooltip/Tooltip";
 import { type RouterOutputs } from "@/src/utils/api";
 import { formatIntervalSeconds } from "@/src/utils/dates";
 import { cn } from "@/src/utils/tailwind";
 import { getLevelColors } from "@/src/components/level-colors";
+import { decodeUnicodeEscapesOnly } from "@/src/utils/unicode";
 
 type EventObservation = RouterOutputs["events"]["all"]["observations"][number];
 type EventObservationIO = RouterOutputs["events"]["batchIO"][number];
@@ -43,6 +48,10 @@ export type SessionObservation = Omit<
   EventObservation,
   "input" | "output" | "metadata" | "traceId"
 > &
+  Omit<
+    SessionTimelineObservation,
+    "input" | "output" | "metadata" | "traceId"
+  > &
   Pick<EventObservationIO, "input" | "output" | "metadata"> & {
     traceId: string;
     inputTruncated?: boolean;
@@ -53,7 +62,12 @@ export type SessionObservation = Omit<
 type SessionConversationTimelineTraceState =
   | { type: "loading" }
   | { type: "error" }
-  | { type: "empty"; message: string }
+  | { type: "empty" }
+  | {
+      type: "filtered-empty";
+      viewLabel: string | null;
+      onClearFilters: () => void;
+    }
   | {
       type: "loaded";
       observations: readonly SessionObservation[];
@@ -87,12 +101,15 @@ function SessionTimelineStatusIndicator({
 }: {
   observation: SessionObservation;
 }) {
-  const Icon =
-    observation.level === "ERROR"
-      ? CircleAlert
-      : observation.level === "WARNING"
-        ? TriangleAlert
-        : Info;
+  const Icon = (() => {
+    if (observation.level === "ERROR") {
+      return CircleAlert;
+    }
+    if (observation.level === "WARNING") {
+      return TriangleAlert;
+    }
+    return Info;
+  })();
   const colors = getLevelColors(observation.level);
 
   return (
@@ -117,10 +134,42 @@ function SessionTimelineStatusIndicator({
   );
 }
 
-const toPreviewText = (value: unknown) =>
-  typeof value === "string"
-    ? value
-    : (JSON.stringify(value, undefined, 2) ?? String(value));
+/**
+ * Badge for a state an observation header reports next to its duration, e.g.
+ * truncated content. The label is both the accessible name and the tooltip.
+ */
+function SessionTimelineMarkerIcon({
+  icon: Icon,
+  label,
+}: {
+  icon: LucideIcon;
+  label: string;
+}) {
+  return (
+    <DSTooltip label={label}>
+      {({ getTriggerProps }) => (
+        <span
+          {...getTriggerProps()}
+          className="bg-muted text-muted-foreground shrink-0 rounded-md p-1"
+          role="img"
+          aria-label={label}
+        >
+          <Icon className="h-3 w-3" aria-hidden="true" />
+        </span>
+      )}
+    </DSTooltip>
+  );
+}
+
+const toPreviewText = (value: unknown) => {
+  const text =
+    typeof value === "string"
+      ? value
+      : (JSON.stringify(value, undefined, 2) ?? String(value));
+  // Match PrettyJsonView / SessionObservationIO: decode \uXXXX so truncated
+  // previews show CJK and other non-ASCII characters instead of raw escapes.
+  return decodeUnicodeEscapesOnly(text, true);
+};
 
 const hasPreviewValue = (value: unknown) =>
   value !== null && value !== undefined && value !== "";
@@ -144,7 +193,7 @@ function SessionObservationActionsMenuContent({
         disabled={actions.comment.disabled}
         onSelect={() => actions.comment.onSelect(observation)}
       >
-        Add comment
+        Comments
       </DropdownMenuItem>
       <DropdownMenuItem
         disabled={actions.addToDataset.disabled}
@@ -233,12 +282,15 @@ function getNestedObservationSummary(
       }
 
       const names = count <= 3 ? Array.from(toolNames) : [];
-      const namesSummary =
-        names.length < 2
-          ? (names[0] ?? "")
-          : names.length === 2
-            ? `${names[0]} and ${names[1]}`
-            : `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+      const namesSummary = (() => {
+        if (names.length < 2) {
+          return names[0] ?? "";
+        }
+        if (names.length === 2) {
+          return `${names[0]} and ${names[1]}`;
+        }
+        return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`;
+      })();
       if (names.length === count) return `tools: ${namesSummary}`;
 
       return `${count} tool${count === 1 ? "" : "s"}${namesSummary ? ` using ${namesSummary}` : ""}`;
@@ -507,34 +559,22 @@ function SessionTimelineConversationObservation({
               <SessionTimelineStatusIndicator observation={observation} />
             ) : null}
             {isTruncated ? (
-              <span
-                className="bg-muted text-muted-foreground shrink-0 rounded-md p-1"
-                role="img"
-                aria-label="Content truncated"
-                title="Content truncated"
-              >
-                <FileWarning className="h-3 w-3" aria-hidden="true" />
-              </span>
+              <SessionTimelineMarkerIcon
+                icon={FileWarning}
+                label="Content truncated"
+              />
             ) : null}
             {hasNoConversationalContent ? (
-              <span
-                className="bg-muted text-muted-foreground shrink-0 rounded-md p-1"
-                role="img"
-                aria-label="No conversational content"
-                title="No conversational content"
-              >
-                <MessageSquareOff className="h-3 w-3" aria-hidden="true" />
-              </span>
+              <SessionTimelineMarkerIcon
+                icon={MessageSquareOff}
+                label="No conversational content"
+              />
             ) : null}
             {observation.metadataTruncated ? (
-              <span
-                className="bg-muted text-muted-foreground shrink-0 rounded-md p-1"
-                role="img"
-                aria-label="Metadata omitted because it is too large"
-                title="Metadata omitted because it is too large"
-              >
-                <FileWarning className="h-3 w-3" aria-hidden="true" />
-              </span>
+              <SessionTimelineMarkerIcon
+                icon={FileWarning}
+                label="Metadata omitted because it is too large"
+              />
             ) : null}
             {observation.latency !== null && observation.type !== "EVENT" ? (
               <span className="text-muted-foreground font-mono text-[11px]">
@@ -746,20 +786,27 @@ function LoadedSessionConversationTimeline({
       ]),
     );
   }, [observations]);
-  let collapsedObservationIds = collapseState.observationIds;
-  if (
-    scrollTarget &&
-    scrollTarget.requestId !== collapseState.scrollRequestId
-  ) {
+  const collapsedObservationIds = useMemo(() => {
+    if (
+      !scrollTarget ||
+      scrollTarget.requestId === collapseState.scrollRequestId
+    ) {
+      return collapseState.observationIds;
+    }
     const target = observations.find(
       ({ observation }) => observation.id === scrollTarget.observationId,
     );
     const observationIds = new Set(collapseState.observationIds);
     target?.ancestorObservationIds.forEach((id) => observationIds.delete(id));
-    collapsedObservationIds = observationIds;
+    return observationIds;
+  }, [scrollTarget, collapseState, observations]);
+  if (
+    scrollTarget &&
+    scrollTarget.requestId !== collapseState.scrollRequestId
+  ) {
     setCollapseState({
       scrollRequestId: scrollTarget.requestId,
-      observationIds,
+      observationIds: collapsedObservationIds,
     });
   }
 
@@ -892,7 +939,8 @@ function LoadedSessionConversationTimeline({
                   }
                   onOpenInTraceView={() => onOpenObservation(observation.id)}
                 />
-              ) : !isToolStart && !isEmptyEnd ? (
+              ) : !isEmptyEnd &&
+                (observation.type !== "TOOL" || phase !== "end") ? (
                 <SessionTimelineObservation
                   observation={observation}
                   parsed={parsed}
@@ -1095,9 +1143,26 @@ export function SessionConversationTimelineTrace({
         <div className="border-destructive/40 bg-destructive/5 text-foreground rounded-lg border p-4 text-xs">
           Failed to load observations.
         </div>
-      ) : state.type === "empty" ? (
-        <div className="text-muted-foreground rounded-lg border border-dashed p-4 text-xs">
-          {state.message}
+      ) : state.type === "empty" || state.type === "filtered-empty" ? (
+        <div className="text-muted-foreground flex items-center justify-between gap-4 rounded-lg border border-dashed p-4 text-xs">
+          <span>
+            {state.type === "empty"
+              ? "This trace has no observations."
+              : state.viewLabel
+                ? `No observation matches the “${state.viewLabel}” view in this trace.`
+                : "No observation matches the current filters in this trace."}
+          </span>
+          {state.type === "filtered-empty" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={state.onClearFilters}
+            >
+              Clear filters
+            </Button>
+          ) : null}
         </div>
       ) : (
         <LoadedSessionConversationTimeline
