@@ -325,7 +325,10 @@ const isInsideRepoDirectory = (candidate) => {
     return false;
   }
 
-  const [topLevel] = relativePath.split("/");
+  // `relative()` returns backslash-separated paths on native Windows, so a
+  // forward-slash-only split would silently keep the whole relative path as
+  // `topLevel` and make every reference look like it escapes the repo.
+  const [topLevel] = relativePath.split(/[\\/]/);
 
   return existsSync(resolve(repoRoot, topLevel));
 };

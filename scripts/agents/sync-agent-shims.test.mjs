@@ -14,6 +14,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 
+// Windows always normalizes a symlink's stored target to backslashes
+// regardless of the separator the creating code passes in, and reports
+// repo-relative paths with native separators too. Compare both kinds of
+// path assertions in POSIX form so this test is platform-independent.
+const toPosix = (value) => value.replaceAll("\\", "/");
+
 const createFixture = (t) => {
   const root = mkdtempSync(join(tmpdir(), "agent-sync-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -53,12 +59,15 @@ test("sync keeps root and nested instructions in AGENTS.md without translation",
   assertSuccess(run());
   assertSuccess(run("--check", "--check-paths"));
 
-  assert.equal(readlinkSync(join(root, "AGENTS.md")), ".agents/AGENTS.md");
+  assert.equal(
+    toPosix(readlinkSync(join(root, "AGENTS.md"))),
+    ".agents/AGENTS.md",
+  );
   for (const directory of ["", "web", "web/src/feature"]) {
     assert.ok(!readdirSync(join(root, directory)).includes("CLAUDE.md"));
   }
   assert.equal(
-    readlinkSync(join(root, ".claude/skills/example")),
+    toPosix(readlinkSync(join(root, ".claude/skills/example"))),
     "../../.agents/skills/example",
   );
   const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
@@ -78,7 +87,7 @@ test("nested guidance paths are validated only when requested", (t) => {
   const result = run("--check", "--check-paths");
   assert.equal(result.status, 1);
   assert.match(
-    result.stderr,
+    toPosix(result.stderr),
     /Broken path reference in web\/src\/feature\/AGENTS.md/,
   );
   assert.doesNotMatch(result.stderr, /vendor.mjs/);
