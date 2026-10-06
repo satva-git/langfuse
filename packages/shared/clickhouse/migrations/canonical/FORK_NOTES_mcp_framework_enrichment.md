@@ -1,6 +1,6 @@
 # Fork customization: native MCP / framework enrichment
 
-**Owner:** analytics / platform team · **Added:** 2026-09-21
+**Owner:** analytics / platform team · **Added:** 2026-09-21 · **Renumbered:** 2026-10-06 (0049→0051, upstream v4.51.0 merge claimed 0049/0050)
 
 This fork carries a permanent custom diff that classifies every trace/observation with
 MCP and Claude-Code-framework fields **at the database layer**, so new data is enriched
@@ -8,7 +8,7 @@ automatically with no backfill script and no scheduled job.
 
 ## What was changed (keep these across upstream merges)
 
-1. **ClickHouse migration** — `0049_add_mcp_and_framework_columns.{up,down}.sql`
+1. **ClickHouse migration** — `0051_add_mcp_and_framework_columns.{up,down}.sql`
    Adds four columns whose values are computed via `DEFAULT` expressions (same convention
    as `evaluator_id` in `0047`), so existing rows resolve on read and new rows compute on
    insert:
@@ -29,8 +29,9 @@ The worker inserts via ClickHouse `JSONEachRow` and never emits these fields, so
 `IngestionService`, `ClickhouseWriter`, or the `definitions.ts` Zod schemas is required.
 
 ## Merge conflict guidance
-- If upstream renumbers migrations past `0048`, renumber `0049_*` to the next free slot;
-  the `DEFAULT`-column approach is idempotent (`ADD COLUMN IF NOT EXISTS`).
+- If upstream renumbers migrations past the current highest version, renumber `0051_*`
+  (this fork's slot, as of the v4.51.0 merge) to the next free slot; the `DEFAULT`-column
+  approach is idempotent (`ADD COLUMN IF NOT EXISTS`).
 - If upstream restructures `dataModel.ts`, re-add the four dimension entries to whichever
   file declares the traces/observations views. They are plain SQL-column dimensions.
 - If upstream moves the physical write off the `observations`/`traces` tables (e.g. onto the
