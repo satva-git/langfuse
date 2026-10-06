@@ -133,23 +133,30 @@ services:
       # In-app agent settings.
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_USER:-}
       LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG: ${LANGFUSE_IN_APP_AGENT_MAX_ACTIVE_RUNS_PER_ORG:-}
-    labels:
-      # --- Block the MCP endpoint from the public internet ------------------
-      # A path-scoped Traefik router (higher priority than the app's catch-all
-      # host router) that only permits private/loopback source IPs. Public
-      # clients hitting https://langfuse.satva.xyz/api/public/mcp get 403.
-      # Internal callers on the `coolify` network (e.g. Obot) reach
-      # http://langfuse-web:3000/api/public/mcp DIRECTLY, bypassing Traefik, so
-      # they are unaffected. Traefik v3 syntax (ipallowlist); on Traefik v2 use
-      # `ipwhitelist` instead. If the block doesn't take effect, raise priority.
-      - "traefik.http.middlewares.lf-mcp-block.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-      - "traefik.http.routers.lf-mcp-block.rule=Host(`langfuse.satva.xyz`) && PathPrefix(`/api/public/mcp`)"
-      - "traefik.http.routers.lf-mcp-block.entrypoints=https"
-      - "traefik.http.routers.lf-mcp-block.tls=true"
-      - "traefik.http.routers.lf-mcp-block.priority=5000"
-      - "traefik.http.routers.lf-mcp-block.middlewares=lf-mcp-block"
-      - "traefik.http.routers.lf-mcp-block.service=lf-mcp-block-svc"
-      - "traefik.http.services.lf-mcp-block-svc.loadbalancer.server.port=3000"
+      # TEMPORARILY DISABLED 2026-10-06: the lf-mcp-block Traefik router below
+      # started blocking the entire app (root path returned "Forbidden"), not
+      # just /api/public/mcp, after this compose file's first real Coolify
+      # deploy post-v4.51.0-merge. Removed to restore production; root cause
+      # (likely a router/priority interaction with Coolify's auto-generated
+      # catch-all router) still needs investigation before re-adding.
+      #
+      # labels:
+      #   # --- Block the MCP endpoint from the public internet ------------------
+      #   # A path-scoped Traefik router (higher priority than the app's catch-all
+      #   # host router) that only permits private/loopback source IPs. Public
+      #   # clients hitting https://langfuse.satva.xyz/api/public/mcp get 403.
+      #   # Internal callers on the `coolify` network (e.g. Obot) reach
+      #   # http://langfuse-web:3000/api/public/mcp DIRECTLY, bypassing Traefik, so
+      #   # they are unaffected. Traefik v3 syntax (ipallowlist); on Traefik v2 use
+      #   # `ipwhitelist` instead. If the block doesn't take effect, raise priority.
+      #   - "traefik.http.middlewares.lf-mcp-block.ipallowlist.sourcerange=127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      #   - "traefik.http.routers.lf-mcp-block.rule=Host(`langfuse.satva.xyz`) && PathPrefix(`/api/public/mcp`)"
+      #   - "traefik.http.routers.lf-mcp-block.entrypoints=https"
+      #   - "traefik.http.routers.lf-mcp-block.tls=true"
+      #   - "traefik.http.routers.lf-mcp-block.priority=5000"
+      #   - "traefik.http.routers.lf-mcp-block.middlewares=lf-mcp-block"
+      #   - "traefik.http.routers.lf-mcp-block.service=lf-mcp-block-svc"
+      #   - "traefik.http.services.lf-mcp-block-svc.loadbalancer.server.port=3000"
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
