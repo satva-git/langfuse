@@ -1,18 +1,21 @@
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import process from "node:process";
 
-const repoRoot = resolve(new URL("../..", import.meta.url).pathname);
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const sourcePath = resolve(repoRoot, ".agents/config.json");
 const config = JSON.parse(readFileSync(sourcePath, "utf8"));
 const servers = config.mcpServers;
@@ -477,13 +480,35 @@ for (const output of symlinkOutputs) {
     }
   }
 
-  rmSync(output.path, { force: true, recursive: true });
-  symlinkSync(
-    relative(dirname(output.path), output.target),
-    output.path,
-    lstatSync(output.target).isDirectory() ? "dir" : "file",
-  );
-  console.log(`Linked ${output.path}`);
+  const relativeTarget = relative(dirname(output.path), output.target);
+  const symlinkType = lstatSync(output.target).isDirectory() ? "dir" : "file";
+  const tempPath = `${output.path}.tmp-${process.pid}`;
+
+  try {
+    rmSync(tempPath, { force: true, recursive: true });
+    symlinkSync(relativeTarget, tempPath, symlinkType);
+    rmSync(output.path, { force: true, recursive: true });
+    renameSync(tempPath, output.path);
+    console.log(`Linked ${output.path}`);
+  } catch (error) {
+    rmSync(tempPath, { force: true, recursive: true });
+
+    // Creating symlinks requires elevated privileges or Developer Mode on
+    // Windows. Fall back to a plain copy so local dev isn't blocked; this
+    // loses live-update-on-source-change, which only matters for editing the
+    // shared source in place rather than through its linked location.
+    if (error && typeof error === "object" && error.code === "EPERM") {
+      console.warn(
+        `Cannot symlink ${output.path} (EPERM - enable Windows Developer Mode ` +
+          `or run elevated to get a real symlink). Copying instead.`,
+      );
+      rmSync(output.path, { force: true, recursive: true });
+      cpSync(output.target, output.path, { recursive: true });
+      continue;
+    }
+
+    throw error;
+  }
 }
 
 for (const directory of managedDirectoryEntries) {
