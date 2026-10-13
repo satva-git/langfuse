@@ -34,6 +34,14 @@ on:
         description: "Set to 1 to score frameworks only."
         required: false
         default: "0"
+      skip_enrich:
+        description: "Set to 1 to skip turn enrichment (trace record, turn_minutes, destructive_command)."
+        required: false
+        default: "0"
+      only_trace_ids:
+        description: "Comma-separated trace ids; limits turn enrichment to these traces."
+        required: false
+        default: ""
 
 concurrency:
   group: rescore-derived-dimensions
@@ -58,4 +66,7 @@ jobs:
           FLOOR_ISO: ${{ github.event.inputs.floor_iso || '' }}
           SKIP_FRAMEWORKS: ${{ github.event.inputs.skip_frameworks || '0' }}
           SKIP_MCP: ${{ github.event.inputs.skip_mcp || '0' }}
+          # Scheduled runs skip enrichment until it is verified on a single trace.
+          SKIP_ENRICH: ${{ github.event.inputs.skip_enrich || '1' }}
+          ONLY_TRACE_IDS: ${{ github.event.inputs.only_trace_ids || '' }}
         run: node scripts/rescore-derived-dimensions.mjs

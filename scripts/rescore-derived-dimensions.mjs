@@ -37,6 +37,22 @@
 //                     scores) -- use with a low FLOOR_ISO to backfill buckets over
 //                     full history without double-counting existing base scores.
 //   DRY_RUN           "1" to log without writing/deleting
+//   SKIP_ENRICH       "1" to skip the Claude Code turn enrichment below
+//   ONLY_TRACE_IDS    comma-separated trace ids; enrichment touches only these
+//                     (used to verify a change on a single trace first)
+//
+// TURN ENRICHMENT (per "Conversational Turn" root span):
+//   * trace record -- the tracking plugin emits each turn under a remote parent
+//     span, so no trace has a parentless root event. Score widgets resolve the
+//     user, session and trace name through that root, which is why per-person
+//     score panels were empty. Ingesting a trace-create event materializes the
+//     root (span_id = trace_id). It carries user, session, name and I/O but NO
+//     tags, so tag-filtered observation widgets do not count it.
+//   * turn_minutes -- NUMERIC score, the turn's measured wall-clock duration.
+//   * destructive_command -- CATEGORICAL score on each Bash/PowerShell tool call
+//     whose command matches a destructive pattern; the command is the comment.
+//     Evaluators cannot see tool calls (they are child spans), so this is the
+//     deterministic check.
 
 import { readFileSync } from "node:fs";
 
@@ -55,6 +71,10 @@ const SKIP_MCP = process.env.SKIP_MCP === "1" || process.env.SKIP_MCP === "true"
 // the original random-id) the base scores that already exist there.
 const BUCKETS_ONLY = process.env.BUCKETS_ONLY === "1" || process.env.BUCKETS_ONLY === "true";
 const DRY_RUN = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+const SKIP_ENRICH = process.env.SKIP_ENRICH === "1" || process.env.SKIP_ENRICH === "true";
+const ONLY_TRACE_IDS = new Set(
+  (process.env.ONLY_TRACE_IDS || "").split(",").map((s) => s.trim()).filter(Boolean),
+);
 
 if (!HOST || !PUBLIC_KEY || !SECRET_KEY) {
   console.error("Missing env: LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY are all required.");
@@ -185,10 +205,10 @@ async function* observations(extraParams) {
   let cursor;
   for (;;) {
     const body = await apiGet("/api/public/v2/observations", {
-      ...extraParams,
       fromStartTime: fromISO,
       toStartTime: toISO,
       limit: 100,
+      ...extraParams,
       cursor,
     });
     const rows = body.data || [];
@@ -229,24 +249,28 @@ async function flush() {
   created += batch.length;
 }
 
-async function writeScore({ id, name, value, traceId, observationId, startTime, comment }) {
+async function writeEvent(event) {
+  buffer.push(event);
+  if (buffer.length >= BATCH) await flush();
+}
+
+async function writeScore({ id, name, value, traceId, observationId, startTime, comment, dataType = "CATEGORICAL" }) {
   const body = {
     id,
     name,
     value,
-    dataType: "CATEGORICAL",
+    dataType,
     traceId,
     environment: "default",
     comment: comment || "scheduled re-score (accurate timestamp)",
   };
   if (observationId) body.observationId = observationId;
-  buffer.push({
+  await writeEvent({
     id: `evt_${id}`,
     timestamp: toIsoOffset(startTime), // event timestamp -> score.timestamp -> real call date
     type: "score-create",
     body,
   });
-  if (buffer.length >= BATCH) await flush();
 }
 
 // ---- Frameworks: one score per (trace, framework) and (trace, skill) --------
@@ -322,6 +346,99 @@ async function rescoreMcp() {
   console.log(`MCP: scanned ${calls} mcp__ tool-call observations in the window.`);
 }
 
+// ---- Turn enrichment: trace record, turn_minutes, destructive_command -------
+const TURN_SPAN_NAME = "Conversational Turn";
+const SHELL_TOOL_NAMES = new Set(["Tool: Bash", "Tool: PowerShell"]);
+// Ordered: first match labels the command.
+const DESTRUCTIVE_PATTERNS = [
+  ["Force push", /\bgit\s+push\b[^\n]*\s(--force(-with-lease)?|-f)\b/],
+  ["Hard reset", /\bgit\s+reset\b[^\n]*\s--hard\b/],
+  ["Discard changes", /\bgit\s+(checkout|restore)\s+(--\s+)?\.(\s|$|")/],
+  ["Clean untracked", /\bgit\s+clean\b[^\n]*\s-[a-zA-Z]*f/],
+  ["Delete branch", /\bgit\s+branch\b[^\n]*\s-D\b/],
+  ["Skip hooks", /\s--no-verify\b/],
+  ["Recursive delete", /\brm\s+-[a-zA-Z]*(rf|fr)[a-zA-Z]*\b|\bRemove-Item\b[^\n]*-Recurse\b[^\n]*-Force\b/i],
+  ["Drop table", /\bDROP\s+(TABLE|DATABASE|SCHEMA)\b/i],
+];
+function destructiveLabel(command) {
+  for (const [label, re] of DESTRUCTIVE_PATTERNS) if (re.test(command)) return label;
+  return null;
+}
+function toolCommand(input) {
+  if (input == null) return "";
+  let parsed = input;
+  if (typeof input === "string") {
+    try { parsed = JSON.parse(input); } catch { return input; }
+  }
+  if (parsed && typeof parsed === "object" && typeof parsed.command === "string") return parsed.command;
+  return typeof input === "string" ? input : JSON.stringify(input);
+}
+
+async function enrichTurns() {
+  let turns = 0;
+  let flagged = 0;
+  for await (const turn of observations({
+    name: TURN_SPAN_NAME,
+    type: "SPAN",
+    fields: "basic,io,metrics,trace_context",
+    limit: 50, // I/O projections over a date range are capped at 50 per page
+  })) {
+    const traceId = turn.traceId;
+    if (!traceId) continue;
+    if (ONLY_TRACE_IDS.size > 0 && !ONLY_TRACE_IDS.has(traceId)) continue;
+    turns += 1;
+    const startTime = toIsoOffset(turn.startTime);
+
+    const traceBody = {
+      id: traceId,
+      timestamp: startTime,
+      name: turn.traceName || "Claude Code Turn",
+      environment: turn.environment || "default",
+    };
+    if (turn.userId) traceBody.userId = turn.userId;
+    if (turn.sessionId) traceBody.sessionId = turn.sessionId;
+    if (turn.input != null) traceBody.input = turn.input;
+    if (turn.output != null) traceBody.output = turn.output;
+    await writeEvent({
+      id: `evt_trace_root_${traceId}`,
+      timestamp: startTime,
+      type: "trace-create",
+      body: traceBody,
+    });
+
+    if (typeof turn.latency === "number" && turn.latency >= 0) {
+      await writeScore({
+        id: scoreId("turn_minutes", turn.id, "v"),
+        name: "turn_minutes",
+        value: Math.round((turn.latency / 60) * 100) / 100,
+        dataType: "NUMERIC",
+        traceId,
+        observationId: turn.id,
+        startTime,
+        comment: "measured turn duration (scheduled enrichment)",
+      });
+    }
+
+    for await (const tool of observations({ traceId, type: "TOOL", fields: "basic,io", limit: 50 })) {
+      if (!SHELL_TOOL_NAMES.has(tool.name)) continue;
+      const command = toolCommand(tool.input);
+      const label = destructiveLabel(command);
+      if (!label) continue;
+      flagged += 1;
+      await writeScore({
+        id: scoreId("destructive_command", tool.id, label),
+        name: "destructive_command",
+        value: label,
+        traceId,
+        observationId: tool.id,
+        startTime: tool.startTime,
+        comment: command.slice(0, 500),
+      });
+    }
+  }
+  console.log(`Enrich: ${turns} turns (trace record + turn_minutes), ${flagged} destructive commands flagged.`);
+}
+
 // ---- Delete mode: remove legacy (random-id) scores by id --------------------
 async function deleteLegacy() {
   let ids;
@@ -357,8 +474,10 @@ async function deleteLegacy() {
   else await rescoreFrameworks();
   if (SKIP_MCP) console.log("MCP: skipped (SKIP_MCP).");
   else await rescoreMcp();
+  if (SKIP_ENRICH) console.log("Enrich: skipped (SKIP_ENRICH).");
+  else await enrichTurns();
   await flush();
-  console.log(DRY_RUN ? `Done (dry run). ${created} scores would be written.` : `Done. ${created} scores ingested (stamped at real call time).`);
+  console.log(DRY_RUN ? `Done (dry run). ${created} events would be written.` : `Done. ${created} events ingested (stamped at real call time).`);
 })().catch((err) => {
   console.error("Re-score job failed:", err);
   process.exit(1);
