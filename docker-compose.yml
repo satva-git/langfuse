@@ -176,10 +176,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: '0.5'
+          memory: 1g
+          cpus: '1.0'
         reservations:
-          memory: 128m
+          memory: 256m
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
