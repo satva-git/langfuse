@@ -68,7 +68,15 @@ services:
       LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY: ${LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY:-miniosecret} # CHANGEME
       LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE: ${LANGFUSE_S3_BATCH_EXPORT_FORCE_PATH_STYLE:-true}
       LANGFUSE_INGESTION_QUEUE_DELAY_MS: ${LANGFUSE_INGESTION_QUEUE_DELAY_MS:-}
-      LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
+      LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-3000}
+      LANGFUSE_INGESTION_CLICKHOUSE_WRITE_BATCH_SIZE: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_BATCH_SIZE:-200}
+      LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY: ${LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY:-8}
+      LANGFUSE_TRACE_UPSERT_WORKER_CONCURRENCY: ${LANGFUSE_TRACE_UPSERT_WORKER_CONCURRENCY:-8}
+      LANGFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY: ${LANGFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY:-3}
+      LANGFUSE_TOKEN_COUNT_WORKER_POOL_SIZE: ${LANGFUSE_TOKEN_COUNT_WORKER_POOL_SIZE:-1}
+      LANGFUSE_LOCAL_CACHE_MODEL_MATCH_ENABLED: ${LANGFUSE_LOCAL_CACHE_MODEL_MATCH_ENABLED:-true}
+      LANGFUSE_LOCAL_CACHE_MODEL_MATCH_MAX: ${LANGFUSE_LOCAL_CACHE_MODEL_MATCH_MAX:-1000}
+      LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_ENABLED: ${LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_ENABLED:-true}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_AUTH: ${REDIS_AUTH:-myredissecret} # CHANGEME
@@ -105,6 +113,13 @@ services:
       LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_EXECUTION_ROLE_ARN: ${LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_EXECUTION_ROLE_ARN:-}
       LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_EGRESS_NETWORK_CONNECTOR_ARN: ${LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_EGRESS_NETWORK_CONNECTOR_ARN:-}
       LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_REGION: ${LANGFUSE_IN_APP_AGENT_SANDBOX_AWS_LAMBDA_MICROVM_REGION:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '1.0'
+        reservations:
+          memory: 256m
 
   langfuse-web:
     image: docker.langfuse.com/langfuse/langfuse:4.54.0
@@ -158,6 +173,13 @@ services:
       #   - "traefik.http.routers.lf-mcp-block.middlewares=lf-mcp-block"
       #   - "traefik.http.routers.lf-mcp-block.service=lf-mcp-block-svc"
       #   - "traefik.http.services.lf-mcp-block-svc.loadbalancer.server.port=3000"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+        reservations:
+          memory: 128m
 
   clickhouse:
     image: docker.io/clickhouse/clickhouse-server:25.12
@@ -179,6 +201,13 @@ services:
       timeout: 5s
       retries: 10
       start_period: 1s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: '1.0'
+        reservations:
+          memory: 512m
 
   minio:
     image: cgr.dev/chainguard/minio
@@ -200,6 +229,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 1s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
+        reservations:
+          memory: 64m
 
   redis:
     image: docker.io/redis:7
@@ -217,6 +253,13 @@ services:
       interval: 3s
       timeout: 10s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: '0.25'
+        reservations:
+          memory: 64m
 
   postgres:
     image: docker.io/postgres:${POSTGRES_VERSION:-17}
@@ -236,6 +279,13 @@ services:
       - 127.0.0.1:5432:5432
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '0.5'
+        reservations:
+          memory: 128m
 
 volumes:
   langfuse_postgres_data:

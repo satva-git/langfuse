@@ -13,6 +13,19 @@ import { prisma } from "../../db";
 import { InvalidRequestError, LangfuseNotFoundError } from "../../errors";
 import { validateDbScoreConfigSafe } from "../../features/scoreConfigs/validation";
 import { ScoreEventType } from "./types";
+import { LocalCache } from "../cache";
+import { env } from "../../env";
+
+type CachedScoreConfig = NonNullable<
+  Awaited<ReturnType<typeof prisma.scoreConfig.findFirst>>
+>;
+
+const scoreConfigLocalCache = new LocalCache<CachedScoreConfig>({
+  namespace: "score_config",
+  enabled: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_ENABLED === "true",
+  ttlMs: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_TTL_MS,
+  max: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_MAX,
+});
 
 type ValidateAndInflateScoreParams = {
   projectId: string;
@@ -33,12 +46,17 @@ export async function validateAndInflateScore(
   }
 
   if (body.configId) {
-    const config = await prisma.scoreConfig.findFirst({
-      where: {
-        projectId,
-        id: body.configId,
+    const configId = body.configId;
+    const cacheKey = `${projectId}:${configId}`;
+    const { value: config } = await scoreConfigLocalCache.getOrLoad(
+      cacheKey,
+      async () => {
+        const row = await prisma.scoreConfig.findFirst({
+          where: { projectId, id: configId },
+        });
+        return { value: row ?? undefined, source: "postgres" };
       },
-    });
+    );
 
     if (!config || !validateDbScoreConfigSafe(config).success)
       throw new LangfuseNotFoundError(

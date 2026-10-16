@@ -144,6 +144,18 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(20_000),
+  LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_ENABLED: z
+    .enum(["true", "false"])
+    .default("false"),
+  LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_TTL_MS: z.coerce
+    .number()
+    .positive()
+    .default(60_000),
+  LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_MAX: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(500),
   LANGFUSE_CACHE_PROMPT_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_CACHE_PROMPT_TTL_SECONDS: z.coerce.number().default(3600), // 1h
   CLICKHOUSE_URL: z.url(),
