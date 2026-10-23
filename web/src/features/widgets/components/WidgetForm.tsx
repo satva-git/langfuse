@@ -105,6 +105,7 @@ import {
   resolveWidgetFormVersion,
   toDefaultValues,
   toSavePayload,
+  isPivotLike,
   widgetChartTypeSupportsBreakdown,
   type SortField,
   type WidgetFormValues,
@@ -174,6 +175,12 @@ const chartTypes: ChartType[] = [
     name: "Pivot Table",
     value: "PIVOT_TABLE",
     icon: dashboardWidgetChartTypeIcons.PIVOT_TABLE,
+  },
+  {
+    group: "total-value",
+    name: "Score Heatmap",
+    value: "SCORE_HEATMAP",
+    icon: dashboardWidgetChartTypeIcons.SCORE_HEATMAP,
   },
 ];
 
@@ -471,27 +478,25 @@ export function WidgetForm({
       : new Date(new Date().getTime() - 7 * 24 * 60 * 60 * 1000);
     const toTimestamp = dateRange ? dateRange.to : new Date();
 
-    const queryDimensions =
-      chartType === "PIVOT_TABLE"
-        ? values.dimensions.map((d) => ({ field: d.field }))
-        : values.dimensions.length > 0
-          ? [{ field: values.dimensions[0].field }]
-          : [];
+    const queryDimensions = isPivotLike(chartType)
+      ? values.dimensions.map((d) => ({ field: d.field }))
+      : values.dimensions.length > 0
+        ? [{ field: values.dimensions[0].field }]
+        : [];
 
-    const queryMetrics =
-      chartType === "PIVOT_TABLE"
-        ? values.metrics
-            .filter((metric) => metric.measure && metric.measure !== "")
-            .map((metric) => ({
-              measure: metric.measure,
-              aggregation: metric.aggregation,
-            }))
-        : [
-            {
-              measure: values.metrics[0]?.measure ?? "count",
-              aggregation: values.metrics[0]?.aggregation ?? "count",
-            },
-          ];
+    const queryMetrics = isPivotLike(chartType)
+      ? values.metrics
+          .filter((metric) => metric.measure && metric.measure !== "")
+          .map((metric) => ({
+            measure: metric.measure,
+            aggregation: metric.aggregation,
+          }))
+      : [
+          {
+            measure: values.metrics[0]?.measure ?? "count",
+            aggregation: values.metrics[0]?.aggregation ?? "count",
+          },
+        ];
 
     const needsTopN = isV2BreakdownChart({
       version: viewVersion,
@@ -513,7 +518,7 @@ export function WidgetForm({
     let chartConfig: QueryType["chartConfig"];
     if (chartType === "HISTOGRAM") {
       chartConfig = { type: chartType, bins: values.chart.bins };
-    } else if (chartType === "PIVOT_TABLE" || needsTopN) {
+    } else if (isPivotLike(chartType) || needsTopN) {
       chartConfig = { type: chartType, row_limit: values.chart.rowLimit };
     } else {
       chartConfig = { type: chartType };
@@ -594,7 +599,7 @@ export function WidgetForm({
   const transformedData: DataPoint[] = useMemo(
     () =>
       queryResult.data?.map((item: any) => {
-        if (chartType === "PIVOT_TABLE") {
+        if (isPivotLike(chartType)) {
           return {
             dimension:
               values.dimensions.length > 0
@@ -659,7 +664,7 @@ export function WidgetForm({
   );
 
   const chartPresentation = useMemo(() => {
-    if (chartType === "PIVOT_TABLE") return undefined;
+    if (isPivotLike(chartType)) return undefined;
     return getWidgetMetricPresentation({
       metric: { measure: selectedMeasure, agg: selectedAggregation },
       view: selectedView,
@@ -709,7 +714,7 @@ export function WidgetForm({
 
     let metrics: WidgetFormValues["metrics"];
     let dimensions: WidgetFormValues["dimensions"];
-    if (chartType === "PIVOT_TABLE") {
+    if (isPivotLike(chartType)) {
       const validMetrics = values.metrics.filter(
         (metric) => metric.measure in newViewDeclaration.measures,
       );
@@ -778,7 +783,7 @@ export function WidgetForm({
   };
 
   const handleImportedWidget = (snapshot: ImportedWidgetFormSnapshot) => {
-    const importIsPivot = snapshot.selectedChartType === "PIVOT_TABLE";
+    const importIsPivot = isPivotLike(snapshot.selectedChartType);
     // The preview version for the imported widget is re-derived from the
     // snapshot's own version hint (not the mount's).
     const importViewVersion = resolveWidgetFormVersion({
@@ -942,9 +947,9 @@ export function WidgetForm({
               {/* Metrics Selection */}
               <div className="space-y-2">
                 <Label htmlFor="metrics-select">
-                  {chartType === "PIVOT_TABLE" ? "Metrics" : "Metric"}
+                  {isPivotLike(chartType) ? "Metrics" : "Metric"}
                 </Label>
-                {chartType === "PIVOT_TABLE" ? (
+                {isPivotLike(chartType) ? (
                   <PivotMetricsField
                     control={form.control}
                     ctx={ctx}
@@ -977,7 +982,7 @@ export function WidgetForm({
 
               {/* Dimension Selection - Regular charts (Breakdown) */}
               {widgetChartTypeSupportsBreakdown(chartType) &&
-                chartType !== "PIVOT_TABLE" && (
+                !isPivotLike(chartType) && (
                   <BreakdownSelect
                     control={form.control}
                     ctx={ctx}
@@ -986,8 +991,8 @@ export function WidgetForm({
                   />
                 )}
 
-              {/* Pivot Table Dimension Selection */}
-              {chartType === "PIVOT_TABLE" && (
+              {/* Pivot-like Dimension Selection */}
+              {isPivotLike(chartType) && (
                 <PivotDimensionsField
                   control={form.control}
                   ctx={ctx}
@@ -996,8 +1001,8 @@ export function WidgetForm({
                 />
               )}
 
-              {/* Pivot Table Default Sort Configuration */}
-              {chartType === "PIVOT_TABLE" && (
+              {/* Pivot-like Default Sort Configuration */}
+              {isPivotLike(chartType) && (
                 <PivotSortField
                   control={form.control}
                   effectiveSort={effectiveSort}
@@ -1105,7 +1110,7 @@ export function WidgetForm({
                   }
                   rowLimit={values.chart.rowLimit}
                   chartConfig={
-                    chartType === "PIVOT_TABLE"
+                    isPivotLike(chartType)
                       ? {
                           type: chartType,
                           dimensions: pivotDimensionFields,
@@ -1147,7 +1152,7 @@ export function WidgetForm({
                           }
                   }
                   sortState={
-                    chartType === "PIVOT_TABLE" ? previewSortState : undefined
+                    isPivotLike(chartType) ? previewSortState : undefined
                   }
                   onSortChange={undefined}
                   isLoading={queryResult.isPending}

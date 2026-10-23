@@ -26,6 +26,7 @@ import { Button } from "@/src/components/ui/button";
 import { AlertCircle } from "lucide-react";
 import { BigNumber } from "@/src/features/widgets/chart-library/BigNumber";
 import { PivotTable } from "@/src/features/widgets/chart-library/PivotTable";
+import { ScoreHeatmap } from "@/src/features/widgets/chart-library/ScoreHeatmap";
 import { type OrderByState } from "@langfuse/shared";
 
 const DEFAULT_METRIC_THEME = {
@@ -285,6 +286,21 @@ const ChartComponent = ({
             config={pivotConfig}
             sortState={sortState}
             onSortChange={onSortChange}
+            isLoading={isLoading}
+          />
+        );
+      }
+      case "SCORE_HEATMAP": {
+        const heatmapConfig = {
+          dimensions: chartConfig?.dimensions ?? [],
+          metrics: chartConfig?.metrics ?? ["metric"],
+          units: chartConfig?.units,
+          rowLimit: chartConfig?.row_limit ?? rowLimit,
+        };
+        return (
+          <ScoreHeatmap
+            data={renderedData}
+            config={heatmapConfig}
             isLoading={isLoading}
           />
         );

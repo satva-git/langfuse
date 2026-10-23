@@ -4,6 +4,7 @@ import {
   BarChart,
   BarChart3,
   BarChartHorizontal,
+  Grid2x2,
   Hash,
   LineChart,
   PieChart,
@@ -24,4 +25,5 @@ export const dashboardWidgetChartTypeIcons: Record<
   NUMBER: Hash,
   HISTOGRAM: BarChart3,
   PIVOT_TABLE: Table,
+  SCORE_HEATMAP: Grid2x2,
 };

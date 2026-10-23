@@ -44,11 +44,17 @@ const BREAKDOWN_CAPABLE_CHART_TYPES = new Set<string>([
   "VERTICAL_BAR",
   "PIE",
   "PIVOT_TABLE",
+  "SCORE_HEATMAP",
 ]);
 
 /** widgetChartTypeSupportsBreakdown is the single source of truth for whether a chart type takes a breakdown dimension. */
 export function widgetChartTypeSupportsBreakdown(type: string): boolean {
   return BREAKDOWN_CAPABLE_CHART_TYPES.has(type);
+}
+
+/** isPivotLike returns true for chart types that share PIVOT_TABLE's multi-dimension/multi-metric form shape. */
+export function isPivotLike(type: string): boolean {
+  return type === "PIVOT_TABLE" || type === "SCORE_HEATMAP";
 }
 
 /**
@@ -197,7 +203,7 @@ export function makeWidgetFormSchema(viewVersion: ViewVersion) {
       }),
     })
     .superRefine((values, ctx) => {
-      const isPivot = values.chart.type === "PIVOT_TABLE";
+      const isPivot = isPivotLike(values.chart.type);
       const isHistogram = values.chart.type === "HISTOGRAM";
       const supportsBreakdown = widgetChartTypeSupportsBreakdown(
         values.chart.type,
@@ -401,7 +407,7 @@ export function resolveWidgetFormVersion(params: {
 export function deriveEffectiveSort(
   values: WidgetFormValues,
 ): SortField | undefined {
-  if (values.chart.type !== "PIVOT_TABLE") return undefined;
+  if (!isPivotLike(values.chart.type)) return undefined;
   return sanitizePivotTableDefaultSort(values.chart.sort ?? undefined, {
     dimensions: values.dimensions.filter((d) => d.field && d.field !== "none"),
     metrics: values.metrics
@@ -420,7 +426,7 @@ export function deriveWidgetSuggestions(values: WidgetFormValues): {
   name: string;
   description: string;
 } {
-  const isPivot = values.chart.type === "PIVOT_TABLE";
+  const isPivot = isPivotLike(values.chart.type);
   const validMetrics = values.metrics.filter(
     (m) => m.measure && m.measure !== "",
   );
@@ -489,7 +495,7 @@ export function normalizeWidgetFormValues(
   values: WidgetFormValues,
   viewVersion: ViewVersion,
 ): WidgetFormValues {
-  const isPivot = values.chart.type === "PIVOT_TABLE";
+  const isPivot = isPivotLike(values.chart.type);
   let metrics = values.metrics;
   let dimensions = values.dimensions;
 
@@ -550,7 +556,7 @@ export function applyChartTypeChange(
   viewVersion: ViewVersion,
 ): WidgetFormValues {
   const crossesPivotBoundary =
-    (values.chart.type === "PIVOT_TABLE") !== (newType === "PIVOT_TABLE");
+    isPivotLike(values.chart.type) !== isPivotLike(newType);
   return normalizeWidgetFormValues(
     {
       ...values,
@@ -573,7 +579,7 @@ export function toDefaultValues(
   initialValues: WidgetInitialValues,
   viewVersion: ViewVersion,
 ): WidgetFormValues {
-  const isPivot = initialValues.chartType === "PIVOT_TABLE";
+  const isPivot = isPivotLike(initialValues.chartType);
 
   const metrics: MetricField[] =
     isPivot && initialValues.metrics?.length
@@ -662,7 +668,7 @@ export function toSavePayload(
     effectiveSort: SortField | undefined;
   },
 ): WidgetSavePayload {
-  const isPivot = values.chart.type === "PIVOT_TABLE";
+  const isPivot = isPivotLike(values.chart.type);
   const validMetrics = values.metrics.filter(
     (m) => m.measure && m.measure !== "",
   );
@@ -695,7 +701,7 @@ export function toSavePayload(
     ? { type: chartType }
     : chartType === "HISTOGRAM"
       ? { type: chartType, bins: values.chart.bins }
-      : chartType === "PIVOT_TABLE"
+      : isPivotLike(chartType)
         ? {
             type: chartType,
             row_limit: values.chart.rowLimit,

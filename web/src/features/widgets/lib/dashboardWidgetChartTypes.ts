@@ -14,6 +14,7 @@ const DASHBOARD_WIDGET_CHART_TYPES = [
   "NUMBER",
   "HISTOGRAM",
   "PIVOT_TABLE",
+  "SCORE_HEATMAP",
 ] as const satisfies readonly DashboardWidgetChartType[];
 
 export const dashboardWidgetChartTypeSchema = z.enum(

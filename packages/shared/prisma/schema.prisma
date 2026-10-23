@@ -1670,6 +1670,7 @@ enum DashboardWidgetChartType {
   NUMBER
   HISTOGRAM
   PIVOT_TABLE
+  SCORE_HEATMAP
 }
 
 model DashboardWidget {
