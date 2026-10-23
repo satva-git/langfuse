@@ -26,6 +26,7 @@ const chartTypeLabels: Record<DashboardWidgetChartType, string> = {
   NUMBER: "Big Number",
   HISTOGRAM: "Histogram",
   PIVOT_TABLE: "Pivot Table",
+  SCORE_HEATMAP: "Score Heatmap",
 };
 
 const chartDisplayModes: Record<DashboardWidgetChartType, string> = {
@@ -38,6 +39,7 @@ const chartDisplayModes: Record<DashboardWidgetChartType, string> = {
   NUMBER: "Total Value",
   HISTOGRAM: "Total Value",
   PIVOT_TABLE: "Total Value",
+  SCORE_HEATMAP: "Total Value",
 };
 
 const viewBadgeVariants = {
@@ -58,6 +60,7 @@ const chartTypeBadgeVariants = {
   NUMBER: "green",
   HISTOGRAM: "purple",
   PIVOT_TABLE: "amber",
+  SCORE_HEATMAP: "amber",
 } as const;
 
 export type WidgetTableRow = {

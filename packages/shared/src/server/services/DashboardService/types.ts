@@ -71,6 +71,16 @@ export const PivotTableChartConfig = BaseTotalValueChartConfig.extend({
     .optional(),
 });
 
+export const ScoreHeatmapChartConfig = BaseTotalValueChartConfig.extend({
+  type: z.literal("SCORE_HEATMAP"),
+  defaultSort: z
+    .object({
+      column: z.string(),
+      order: z.enum(["ASC", "DESC"]),
+    })
+    .optional(),
+});
+
 // Define dimension schema
 export const DimensionSchema = z.object({
   field: z.string(),
@@ -93,6 +103,7 @@ export const ChartConfigSchema = z.discriminatedUnion("type", [
   BigNumberChartConfig,
   HistogramChartConfig,
   PivotTableChartConfig,
+  ScoreHeatmapChartConfig,
 ]);
 
 export const DashboardDefinitionWidgetWidgetSchema = z.object({
