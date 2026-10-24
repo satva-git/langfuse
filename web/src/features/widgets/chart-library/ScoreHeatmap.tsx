@@ -46,15 +46,25 @@ export function ScoreHeatmap({
     const metrics = config.metrics ?? [];
     const rows = data as unknown as DatabaseRow[];
 
+    // Compute per-row average across all non-null cell values.
+    function rowAvg(
+      cells: Record<string, Record<string, number | null>>,
+      rk: string,
+    ): number {
+      const vals = Object.values(cells[rk] ?? {}).filter(
+        (v): v is number => v !== null,
+      );
+      return vals.length
+        ? vals.reduce((a, b) => a + b, 0) / vals.length
+        : -Infinity;
+    }
+
     if (dims.length >= 2) {
       // 2-dimension mode
       const rowDim = dims[0];
       const colDim = dims[1];
       const metricKey = metrics[0] ?? "metric";
 
-      const rowKeys = [
-        ...new Set(rows.map((r) => r[rowDim]?.toString() ?? "")),
-      ].filter(Boolean);
       const colKeys = [...new Set(rows.map((r) => r[colDim]?.toString() ?? ""))]
         .filter(Boolean)
         .sort();
@@ -68,6 +78,11 @@ export function ScoreHeatmap({
         cells[rk][ck] = typeof v === "number" ? v : null;
       }
 
+      // Sort rows by descending subtotal average.
+      const rowKeys = [...new Set(rows.map((r) => r[rowDim]?.toString() ?? ""))]
+        .filter(Boolean)
+        .sort((a, b) => rowAvg(cells, b) - rowAvg(cells, a));
+
       const allValues = Object.values(cells)
         .flatMap((r) => Object.values(r))
         .filter((v): v is number => v !== null);
@@ -80,9 +95,6 @@ export function ScoreHeatmap({
     if (dims.length === 1 && metrics.length > 1) {
       // 1-dimension + multi-metric mode
       const rowDim = dims[0];
-      const rowKeys = [
-        ...new Set(rows.map((r) => r[rowDim]?.toString() ?? "")),
-      ].filter(Boolean);
       const colKeys = metrics;
 
       const cells: Record<string, Record<string, number | null>> = {};
@@ -95,6 +107,11 @@ export function ScoreHeatmap({
             typeof metricValues[m] === "number" ? metricValues[m] : null;
         }
       }
+
+      // Sort rows by descending subtotal average.
+      const rowKeys = [...new Set(rows.map((r) => r[rowDim]?.toString() ?? ""))]
+        .filter(Boolean)
+        .sort((a, b) => rowAvg(cells, b) - rowAvg(cells, a));
 
       const allValues = Object.values(cells)
         .flatMap((r) => Object.values(r))
@@ -128,6 +145,17 @@ export function ScoreHeatmap({
   const { rowKeys, colKeys, cells, min, max } = matrix;
   const range = max - min || 1;
 
+  // Per-row subtotal averages (already used for sort order).
+  const rowAvgs: Record<string, number | null> = {};
+  for (const rk of rowKeys) {
+    const vals = colKeys
+      .map((ck) => cells[rk]?.[ck] ?? null)
+      .filter((v): v is number => v !== null);
+    rowAvgs[rk] = vals.length
+      ? vals.reduce((a, b) => a + b, 0) / vals.length
+      : null;
+  }
+
   return (
     <div className="overflow-auto">
       <table className="w-full border-collapse text-xs">
@@ -143,41 +171,61 @@ export function ScoreHeatmap({
                 <div className="max-w-24 truncate">{formatMetricName(col)}</div>
               </th>
             ))}
+            <th className="text-muted-foreground border p-1 font-medium whitespace-nowrap">
+              Avg
+            </th>
           </tr>
         </thead>
         <tbody>
-          {rowKeys.map((row) => (
-            <tr key={row}>
-              <td
-                className="bg-background sticky left-0 z-10 max-w-36 truncate border p-1 font-medium"
-                title={row}
-              >
-                {row}
-              </td>
-              {colKeys.map((col) => {
-                const val = cells[row]?.[col] ?? null;
-                const ratio = val !== null ? (val - min) / range : null;
-                return (
-                  <td
-                    key={col}
-                    className={cn(
-                      "border p-1 text-center whitespace-nowrap tabular-nums",
-                      ratio !== null
-                        ? heatColorClass(ratio)
-                        : "bg-muted text-muted-foreground",
-                    )}
-                    title={
-                      val !== null
-                        ? `${row} / ${col}: ${val.toFixed(4)}`
-                        : "No data"
-                    }
-                  >
-                    {val !== null ? val.toFixed(2) : "—"}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
+          {rowKeys.map((row) => {
+            const avg = rowAvgs[row];
+            const avgRatio = avg !== null ? (avg - min) / range : null;
+            return (
+              <tr key={row}>
+                <td
+                  className="bg-background sticky left-0 z-10 max-w-36 truncate border p-1 font-medium"
+                  title={row}
+                >
+                  {row}
+                </td>
+                {colKeys.map((col) => {
+                  const val = cells[row]?.[col] ?? null;
+                  const ratio = val !== null ? (val - min) / range : null;
+                  return (
+                    <td
+                      key={col}
+                      className={cn(
+                        "border p-1 text-center whitespace-nowrap tabular-nums",
+                        ratio !== null
+                          ? heatColorClass(ratio)
+                          : "bg-muted text-muted-foreground",
+                      )}
+                      title={
+                        val !== null
+                          ? `${row} / ${col}: ${val.toFixed(4)}`
+                          : "No data"
+                      }
+                    >
+                      {val !== null ? val.toFixed(2) : "—"}
+                    </td>
+                  );
+                })}
+                <td
+                  className={cn(
+                    "border p-1 text-center font-semibold whitespace-nowrap tabular-nums",
+                    avgRatio !== null
+                      ? heatColorClass(avgRatio)
+                      : "bg-muted text-muted-foreground",
+                  )}
+                  title={
+                    avg !== null ? `Row avg: ${avg.toFixed(4)}` : "No data"
+                  }
+                >
+                  {avg !== null ? avg.toFixed(2) : "—"}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
