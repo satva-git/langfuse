@@ -165,13 +165,18 @@ export function ScoreHeatmap({
             {colKeys.map((col) => (
               <th
                 key={col}
-                className="text-muted-foreground max-w-28 border p-1 font-medium whitespace-nowrap"
+                className="text-muted-foreground max-w-28 border p-1 font-bold whitespace-nowrap"
                 title={col}
               >
-                <div className="max-w-24 truncate">{formatMetricName(col)}</div>
+                <div
+                  className="max-w-24 truncate"
+                  title={formatMetricName(col)}
+                >
+                  {formatMetricName(col)}
+                </div>
               </th>
             ))}
-            <th className="text-muted-foreground border p-1 font-medium whitespace-nowrap">
+            <th className="text-muted-foreground border p-1 font-bold whitespace-nowrap">
               Avg
             </th>
           </tr>
@@ -183,7 +188,7 @@ export function ScoreHeatmap({
             return (
               <tr key={row}>
                 <td
-                  className="bg-background sticky left-0 z-10 max-w-36 truncate border p-1 font-medium"
+                  className="bg-background sticky left-0 z-10 max-w-36 truncate border p-1 font-bold"
                   title={row}
                 >
                   {row}
@@ -212,7 +217,7 @@ export function ScoreHeatmap({
                 })}
                 <td
                   className={cn(
-                    "border p-1 text-center font-semibold whitespace-nowrap tabular-nums",
+                    "border p-1 text-center font-bold whitespace-nowrap tabular-nums",
                     avgRatio !== null
                       ? heatColorClass(avgRatio)
                       : "bg-muted text-muted-foreground",
