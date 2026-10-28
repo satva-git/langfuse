@@ -20,11 +20,31 @@ type CachedScoreConfig = NonNullable<
   Awaited<ReturnType<typeof prisma.scoreConfig.findFirst>>
 >;
 
+const DEFAULT_LOCAL_CACHE_SCORE_CONFIG_TTL_MS = 60_000;
+const DEFAULT_LOCAL_CACHE_SCORE_CONFIG_MAX = 500;
+
+// env values are validated with zod defaults at runtime, but DOCKER_BUILD skips
+// validation (and its defaults), so during `next build` these arrive undefined.
+// Fall back explicitly so the LRU cache always has a positive bound.
+const toPositiveNumberOrDefault = (
+  value: unknown,
+  fallback: number,
+): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const scoreConfigLocalCache = new LocalCache<CachedScoreConfig>({
   namespace: "score_config",
   enabled: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_ENABLED === "true",
-  ttlMs: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_TTL_MS,
-  max: env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_MAX,
+  ttlMs: toPositiveNumberOrDefault(
+    env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_TTL_MS,
+    DEFAULT_LOCAL_CACHE_SCORE_CONFIG_TTL_MS,
+  ),
+  max: toPositiveNumberOrDefault(
+    env.LANGFUSE_LOCAL_CACHE_SCORE_CONFIG_MAX,
+    DEFAULT_LOCAL_CACHE_SCORE_CONFIG_MAX,
+  ),
 });
 
 type ValidateAndInflateScoreParams = {
