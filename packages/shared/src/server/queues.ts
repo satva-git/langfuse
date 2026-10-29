@@ -415,6 +415,7 @@ export enum QueueName {
   BlobStorageIntegrationQueue = "blobstorage-integration-queue",
   BlobStorageIntegrationProcessingQueue = "blobstorage-integration-processing-queue",
   CoreDataS3ExportQueue = "core-data-s3-export-queue",
+  LowConfidenceEvalBackstopQueue = "low-confidence-eval-backstop-queue",
   MeteringDataPostgresExportQueue = "metering-data-postgres-export-queue",
   DataRetentionQueue = "data-retention-queue",
   DataRetentionProcessingQueue = "data-retention-processing-queue",
@@ -455,6 +456,7 @@ export enum QueueJobs {
   BlobStorageIntegrationJob = "blobstorage-integration-job",
   BlobStorageIntegrationProcessingJob = "blobstorage-integration-processing-job",
   CoreDataS3ExportJob = "core-data-s3-export-job",
+  LowConfidenceEvalBackstopJob = "low-confidence-eval-backstop-job",
   MeteringDataPostgresExportJob = "metering-data-postgres-export-job",
   DataRetentionJob = "data-retention-job",
   DataRetentionProcessingJob = "data-retention-processing-job",
@@ -692,5 +694,10 @@ export type TQueueJobTypes = {
     id: string;
     payload: InAppAgentRunQueueEventType;
     name: QueueJobs.InAppAgentRunJob;
+  };
+  [QueueName.LowConfidenceEvalBackstopQueue]: {
+    timestamp: Date;
+    id: string;
+    name: QueueJobs.LowConfidenceEvalBackstopJob;
   };
 };

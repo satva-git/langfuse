@@ -418,6 +418,11 @@ const EnvSchema = z.object({
     .default("false"),
   LANGFUSE_S3_CORE_DATA_EXPORT_SSE: z.enum(["AES256", "aws:kms"]).optional(),
   LANGFUSE_S3_CORE_DATA_EXPORT_SSE_KMS_KEY_ID: z.string().optional(),
+  // Low-confidence eval backstop (worker recurring job). The queue singleton is
+  // env-gated and schedules on this cron; the full job configuration lives in
+  // the worker env schema.
+  LANGFUSE_EVAL_BACKSTOP_ENABLED: z.enum(["true", "false"]).default("false"),
+  LANGFUSE_EVAL_BACKSTOP_CRON: z.string().default("*/15 * * * *"),
   LANGFUSE_POSTGRES_METERING_DATA_EXPORT_IS_ENABLED: z
     .enum(["true", "false"])
     .default("false"),

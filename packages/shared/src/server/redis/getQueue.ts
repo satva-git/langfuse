@@ -16,6 +16,7 @@ import { MixpanelIntegrationProcessingQueue } from "./mixpanelIntegrationProcess
 import { BlobStorageIntegrationQueue } from "./blobStorageIntegrationQueue";
 import { BlobStorageIntegrationProcessingQueue } from "./blobStorageIntegrationProcessingQueue";
 import { CoreDataS3ExportQueue } from "./coreDataS3ExportQueue";
+import { LowConfidenceEvalBackstopQueue } from "./lowConfidenceEvalBackstopQueue";
 import { MeteringDataPostgresExportQueue } from "./meteringDataPostgresExportQueue";
 import { DataRetentionQueue } from "./dataRetentionQueue";
 import { DataRetentionProcessingQueue } from "./dataRetentionProcessingQueue";
@@ -83,6 +84,8 @@ export function getQueue(
       return BlobStorageIntegrationProcessingQueue.getInstance();
     case QueueName.CoreDataS3ExportQueue:
       return CoreDataS3ExportQueue.getInstance();
+    case QueueName.LowConfidenceEvalBackstopQueue:
+      return LowConfidenceEvalBackstopQueue.getInstance();
     case QueueName.MeteringDataPostgresExportQueue:
       return MeteringDataPostgresExportQueue.getInstance();
     case QueueName.DataRetentionQueue:

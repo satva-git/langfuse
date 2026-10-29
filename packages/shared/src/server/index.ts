@@ -125,6 +125,7 @@ export * from "./redis/blobStorageIntegrationProcessingQueue";
 export * from "./redis/dataRetentionQueue";
 export * from "./redis/dataRetentionProcessingQueue";
 export * from "./redis/coreDataS3ExportQueue";
+export * from "./redis/lowConfidenceEvalBackstopQueue";
 export * from "./redis/meteringDataPostgresExportQueue";
 export * from "./redis/notificationQueue";
 export * from "./webhooks/validation";

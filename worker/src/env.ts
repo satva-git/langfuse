@@ -482,6 +482,26 @@ const EnvSchema = z.object({
   LANGFUSE_S3_CORE_DATA_UPLOAD_SSE: z.enum(["AES256", "aws:kms"]).optional(),
   LANGFUSE_S3_CORE_DATA_UPLOAD_SSE_KMS_KEY_ID: z.string().optional(),
 
+  // Low-confidence eval backstop (recurring worker job). Disabled and in
+  // dry-run by default. Re-judges low-confidence JEV decision-model scores
+  // with a cheap LLM and overwrites them in place.
+  LANGFUSE_EVAL_BACKSTOP_ENABLED: z.enum(["true", "false"]).default("false"),
+  LANGFUSE_EVAL_BACKSTOP_DRY_RUN: z.enum(["true", "false"]).default("true"),
+  LANGFUSE_EVAL_BACKSTOP_CRON: z.string().default("*/15 * * * *"),
+  LANGFUSE_EVAL_BACKSTOP_LOOKBACK_MINUTES: z.coerce.number().default(120),
+  LANGFUSE_EVAL_BACKSTOP_CONFIDENCE_THRESHOLD: z.coerce
+    .number()
+    .min(0)
+    .max(1)
+    .default(0.3),
+  LANGFUSE_EVAL_BACKSTOP_MODEL: z.string().default("google/gemini-2.5-flash"),
+  LANGFUSE_EVAL_BACKSTOP_PROVIDER: z.string().optional(),
+  LANGFUSE_EVAL_BACKSTOP_PROJECT_IDS: z.string().optional(),
+  LANGFUSE_EVAL_BACKSTOP_QUESTION_IDS: z.string().optional(),
+  LANGFUSE_EVAL_BACKSTOP_EXCLUDE_QUESTION_IDS: z.string().optional(),
+  LANGFUSE_EVAL_BACKSTOP_LLM_TIMEOUT_MS: z.coerce.number().default(30000),
+  LANGFUSE_EVAL_BACKSTOP_MAX_PER_RUN: z.coerce.number().default(50),
+
   // Media upload
   LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: z.string().optional(),
   LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: z.string().default(""),

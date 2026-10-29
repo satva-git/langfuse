@@ -26,6 +26,7 @@ import { inAppAgentRunQueueProcessor } from "./queues/inAppAgentRunQueue";
 import { WorkerManager } from "./queues/workerManager";
 import {
   CoreDataS3ExportQueue,
+  LowConfidenceEvalBackstopQueue,
   DataRetentionQueue,
   MeteringDataPostgresExportQueue,
   PostHogIntegrationQueue,
@@ -76,6 +77,7 @@ import {
   blobStorageIntegrationProcessor,
 } from "./queues/blobStorageIntegrationQueue";
 import { coreDataS3ExportProcessor } from "./queues/coreDataS3ExportQueue";
+import { lowConfidenceEvalBackstopProcessor } from "./queues/lowConfidenceEvalBackstopQueue";
 import { meteringDataPostgresExportProcessor } from "./ee/meteringDataPostgresExport/handleMeteringDataPostgresExportJob";
 import {
   dataRetentionProcessingProcessor,
@@ -202,6 +204,23 @@ if (env.LANGFUSE_S3_CORE_DATA_EXPORT_IS_ENABLED === "true") {
   WorkerManager.register(
     QueueName.CoreDataS3ExportQueue,
     coreDataS3ExportProcessor,
+  );
+}
+
+if (env.LANGFUSE_EVAL_BACKSTOP_ENABLED === "true") {
+  // Instantiate the queue to trigger scheduled jobs
+  LowConfidenceEvalBackstopQueue.getInstance();
+  WorkerManager.register(
+    QueueName.LowConfidenceEvalBackstopQueue,
+    lowConfidenceEvalBackstopProcessor,
+    {
+      limiter: {
+        // Run at most once per minute fleet-wide; it calls a paid LLM and
+        // writes scores.
+        max: 1,
+        duration: 60_000,
+      },
+    },
   );
 }
 
