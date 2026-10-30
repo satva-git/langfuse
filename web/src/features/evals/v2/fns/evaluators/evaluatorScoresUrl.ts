@@ -40,7 +40,12 @@ export function evaluatorScoresUrl(
       value: ["EVAL"],
     },
   ];
-  return `/project/${projectId}/scores?showAllEnvironments=true&filter=${encodeURIComponent(encodeFiltersGeneric(filter))}`;
+  // Bound the scores view to a recent window on arrival. Without a dateRange the
+  // scores table inherits the persisted global window (up to 90 days), and its
+  // events-backed total-count query (scores.countAllFromEvents) dedups every
+  // matching score in that window and times out on high-volume projects. The
+  // sibling evaluatorExecutionsUrl bounds the same way.
+  return `/project/${encodeURIComponent(projectId)}/scores?dateRange=7d&showAllEnvironments=true&filter=${encodeURIComponent(encodeFiltersGeneric(filter))}`;
 }
 
 export function evaluatorExecutionsUrl(
