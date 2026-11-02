@@ -443,6 +443,15 @@ const EnvSchema = z.object({
     .positive()
     .default(20_000),
   LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS: z.coerce.number().default(600_000), // 10 minutes
+  // Per-query client request timeout (ms) for read/UI ClickHouse queries that
+  // do not set their own timeout. The ClickHouse server max_execution_time is
+  // derived from this. Raised from the historical 30s to give heavy UI queries
+  // headroom on resource-constrained self-hosted deployments.
+  LANGFUSE_CLICKHOUSE_CLIENT_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60_000),
   LANGFUSE_CLICKHOUSE_QUERY_MAX_ATTEMPTS: z.coerce.number().default(3), // Maximum attempts for socket hang up errors
   LANGFUSE_SKIP_S3_LIST_FOR_OBSERVATIONS_PROJECT_IDS: z.string().optional(),
   LANGFUSE_INGESTION_PROCESSING_SAMPLED_PROJECTS: z

@@ -47,7 +47,8 @@ type RequestTimeoutClickHouseSettings = ClickHouseSettings & {
   timeout_before_checking_execution_speed?: number;
 };
 
-const CLICKHOUSE_CLIENT_DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const CLICKHOUSE_CLIENT_DEFAULT_REQUEST_TIMEOUT_MS =
+  env.LANGFUSE_CLICKHOUSE_CLIENT_REQUEST_TIMEOUT_MS;
 const CLICKHOUSE_SERVER_TIMEOUT_GRACE_SECONDS = 5;
 
 /**
