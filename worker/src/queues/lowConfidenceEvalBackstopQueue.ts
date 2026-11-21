@@ -30,7 +30,7 @@ function stripJsonFences(text: string): string {
  * ClickHouse, resolves the model/key from Postgres, and reuses the eval
  * execution deps for score persistence.
  */
-function createProductionBackstopDeps(): BackstopDeps {
+export function createProductionBackstopDeps(): BackstopDeps {
   const evalDeps = createProductionEvalExecutionDeps();
 
   return {
@@ -102,7 +102,7 @@ function createProductionBackstopDeps(): BackstopDeps {
       return {
         valid: true,
         config: {
-          adapter: result.config.adapter,
+          adapter: apiKey.adapter,
           model: result.config.model,
           secretKey: apiKey.secretKey,
           extraHeaders: apiKey.extraHeaders,
